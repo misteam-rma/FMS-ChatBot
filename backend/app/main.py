@@ -4,6 +4,7 @@ Registers all routers, initializes DB, and starts the background scheduler.
 """
 
 from contextlib import asynccontextmanager
+import os
 import time
 import logging
 from fastapi import FastAPI, Request
@@ -111,9 +112,11 @@ async def log_requests(request: Request, call_next):
 
 # ── CORS ──────────────────────────────────────────────────
 
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust in production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
