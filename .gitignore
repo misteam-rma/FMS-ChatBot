@@ -64,3 +64,5 @@ Thumbs.db
 .agent/
 _agents/
 _agent/
+backenddeploy.md
+frontenddeploy.md
