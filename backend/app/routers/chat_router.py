@@ -163,6 +163,7 @@ async def send_message(
     try:
         agent_result = await chat_with_agent(
             company_id=company_id,
+            company_name=company.name,
             employee_id=employee_id,
             employee_name=user.employee_name,
             role=user.role.value if isinstance(user.role, UserRole) else user.role,

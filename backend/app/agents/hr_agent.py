@@ -19,6 +19,7 @@ from app.models.models import DatabaseType
 class AgentState(TypedDict):
     # Session info
     company_id: str
+    company_name: str
     employee_id: str
     employee_name: str
     role: str
@@ -64,28 +65,37 @@ async def understand_intent(state: AgentState) -> AgentState:
     prompt = f"""You are an intent classifier for an HR Support chatbot.
 
 Employee: {state['employee_name']} (ID: {state['employee_id']}, Role: {state['role']})
+Company: {state.get('company_name', 'Unknown')}
 
 The user said: "{state['current_input']}"
 
 Classify ALL intents present in this message. A single message can have MULTIPLE intents.
 Available intent categories:
-- "greeting" — Hello, hi, good morning, etc.
-- "policy_query" — Questions about company rules, policies, leave policy, etc.
-- "data_query" — Checking leave balance, salary info, personal details, holidays, team size, etc.
-- "data_update" — HR/Admin wants to UPDATE employee data (change designation, update salary, modify details)
-- "leave_request" — Applying for leave, requesting time off
-- "resignation" — Submitting resignation
-- "grievance" — Filing a complaint or grievance
-- "approval_action" — Manager/HR approving or rejecting a request
-- "status_check" — Checking status of a previous request
-- "support" — Password reset, login issues, account problems
-- "general" — Everything else
+- "greeting" — Hello, hi, good morning, thank you, bye, small talk, etc.
+- "policy_query" — Questions about company rules, policies, leave policy, working hours, code of conduct, etc.
+- "data_query" — Asking about own employment data: leave balance, salary, personal details (name, blood group, address, manager, joining date), holidays, team size, etc.
+- "data_update" — HR/Admin explicitly wants to UPDATE someone's data (change designation, update salary, modify details).
+- "leave_request" — Applying for leave, requesting time off (e.g. "I want leave on Monday", "apply 3 days sick leave").
+- "resignation" — Submitting resignation, quitting.
+- "grievance" — Filing a complaint or grievance.
+- "approval_action" — Manager/HR approving or rejecting a request.
+- "status_check" — Checking status of a previously submitted request.
+- "support" — Password reset, login issues, account problems.
+- "general" — Anything else: company info questions, conversational chat, "what can you do", "who is HR", clarifications, broad questions about the workplace, etc.
+
+Important:
+- If the user is just asking a question that doesn't clearly fit data/policy/request, prefer "general" — the general handler is smart and can answer conversationally.
+- "What is my company name" → "data_query" (it's about their employment context)
+- "Who is the CEO" / "Tell me about the company" → "general"
+- "What can you help me with" → "general"
 
 If the message contains multiple intents, return them comma-separated.
 Examples:
 - "hi, show me my leave balance" → "greeting,data_query"
 - "tell me my details and company policy" → "data_query,policy_query"
 - "I want to apply for leave" → "leave_request"
+- "thanks!" → "greeting"
+- "what is botivate" → "general"
 
 Return ONLY the intent string(s), nothing else.
 """
@@ -377,10 +387,11 @@ async def handle_data_query(state: AgentState) -> AgentState:
         llm = get_llm()
         print(f"[{state['company_id']}][AGENT DATA QUERY] Context prepared. Sending context to AI (Length: {len(data_context) + len(extra_context)} chars).")
         
-        answer_prompt = f"""You are an HR assistant. Answer the employee's question using ONLY the data below.
+        answer_prompt = f"""You are an HR assistant at {state.get('company_name', 'the company')}. Answer the employee's question using ONLY the data below.
 
 IMPORTANT: The logged-in employee is {state['employee_name']} (ID: {state['employee_id']}).
-When they ask "my details" or "my data", ONLY show THIS employee's information.
+Company Name: {state.get('company_name', 'Not specified')}
+When they ask "my details", "my data", or "my company name", ONLY use the data provided above.
 
 Logged-in Employee's Data:
 {data_context}
@@ -625,22 +636,62 @@ Return ONLY valid JSON:
 # ── Node 8: General Response ─────────────────────────────
 
 async def handle_general(state: AgentState) -> AgentState:
-    """Handle general or unclassifiable messages."""
+    """Handle general or unclassifiable messages.
+
+    Uses a layered approach:
+    1. Pulls company policy context (RAG) when available
+    2. Provides employee profile + company info
+    3. Lets the LLM be a helpful general assistant that prioritizes company context
+    """
     llm = get_llm()
 
     emp_data = json.dumps(state.get("employee_data", {}), indent=2, default=str)
+    company_name = state.get("company_name") or "the company"
+    user_msg = state["current_input"]
 
-    prompt = f"""You are an HR Support AI assistant for {state['employee_name']} (Role: {state['role']}).
+    # Try to pull a small relevant policy snippet for extra context
+    policy_snippet = ""
+    try:
+        from app.config import settings as app_settings
+        if app_settings.openai_api_key and app_settings.openai_api_key != "your-openai-api-key-here":
+            from app.services.rag_service import answer_from_policies
+            rag_answer = await answer_from_policies(state["company_id"], user_msg)
+            if rag_answer and "could not find" not in rag_answer.lower() and "no relevant" not in rag_answer.lower():
+                policy_snippet = f"\n\nRelevant company policy context:\n{rag_answer[:1500]}"
+    except Exception as e:
+        print(f"[{state['company_id']}][AGENT GENERAL] RAG snippet fetch skipped: {e}")
 
-You must ONLY respond based on company policies and employee data. Do NOT use any generic HR knowledge.
+    prompt = f"""You are a helpful HR Support assistant for {state['employee_name']} (Role: {state['role']}) working at **{company_name}**.
 
-Employee profile:
+Your job is to be genuinely helpful — answer the employee's question naturally and conversationally.
+
+## What you know:
+- **Company:** {company_name}
+- **Employee profile (full record from HR database):**
 {emp_data}
+{policy_snippet}
 
-The user said: "{state['current_input']}"
+## How to answer:
 
-If you can answer from the data, answer helpfully. If not, politely say you can help with policy queries, leave requests, status checks, or direct them to company support.
-"""
+1. **If the question is about the employee themselves** (their name, role, salary, leave, joining date, manager, department, blood group, address, etc.) → answer directly from the employee profile above.
+
+2. **If the question is about the company** (company name, policies, working hours, holidays, rules, etc.) → answer from the company info and policy context above.
+
+3. **If the question is conversational or general** (greetings, "thank you", small talk, "how are you", "what can you do", etc.) → respond naturally and warmly. You don't need data for these.
+
+4. **If the question is HR-related but you don't have the specific data** → say what info you DO have, suggest related things you can help with (policies, leave balance, request status), and offer to escalate to HR/manager if needed.
+
+5. **If the question is completely unrelated to work** (e.g. "what's the weather", "tell me a joke", "write code") → politely steer back: "I'm focused on helping you with HR matters at {company_name} — things like policies, leave, requests, or your employment details. Is there anything HR-related I can help with?"
+
+## Style:
+- Be warm, concise, and professional.
+- Use **bold** for key facts and bullet points for lists.
+- Never invent data that isn't in the profile or policies.
+- If you genuinely don't know, say so — but always offer a helpful next step.
+
+The user just said: "{user_msg}"
+
+Respond now."""
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     state["response"] = response.content.strip()
     state["actions"] = []
@@ -777,6 +828,7 @@ agent_graph = build_agent_graph().compile()
 
 async def chat_with_agent(
     company_id: str,
+    company_name: str,
     employee_id: str,
     employee_name: str,
     role: str,
@@ -794,6 +846,7 @@ async def chat_with_agent(
     """
     initial_state: AgentState = {
         "company_id": company_id,
+        "company_name": company_name,
         "employee_id": employee_id,
         "employee_name": employee_name,
         "role": role,
