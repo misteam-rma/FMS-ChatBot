@@ -1,0 +1,176 @@
+================================================================================
+                    EMPLOYEE PORTAL - DEPLOYMENT COMMANDS
+================================================================================
+
+📋 WHAT YOU NEED:
+  1. Google Service Account JSON file (from Google Cloud)
+  2. OpenAI API Key
+  3. Google Sheets ID (from your employee data sheet)
+  4. Render.com account
+
+================================================================================
+                            LOCAL TESTING (WINDOWS)
+================================================================================
+
+1️⃣  INSTALL PYTHON 3.10
+    - Download: https://www.python.org/downloads/release/python-3100/
+    - Check "Add Python to PATH" during installation
+    - Verify: python --version
+
+2️⃣  CREATE .env FILE
+    Location: C:\Users\prabh\Desktop\HR_Support\.env
+
+    Copy this and fill in YOUR values:
+    ───────────────────────────────────────────────────────────────
+    DATABASE_URL=sqlite+aiosqlite:///./botivate_master.db
+    JWT_SECRET_KEY=generate-random-32-char-string
+    OPENAI_API_KEY=sk-proj-xxxxxxxxxx
+    OPENAI_MODEL=gpt-4o-mini
+    APP_NAME=Employee Portal
+    GOOGLE_SHEET_ID=1SRVhz6oD35pb-wLHOd6TyxSRJcvwvFYeGhlXuScHLHY
+    GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...full json here...}
+    SKIP_GOOGLE_AUTH=false
+    ───────────────────────────────────────────────────────────────
+
+3️⃣  INSTALL DEPENDENCIES
+    Open PowerShell and run:
+
+    cd C:\Users\prabh\Desktop\HR_Support\backend
+    pip install -r requirements.txt
+
+4️⃣  START BACKEND
+    In PowerShell, run:
+
+    cd C:\Users\prabh\Desktop\HR_Support\backend
+    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    Expected output:
+    INFO:     Uvicorn running on http://0.0.0.0:8000
+    🚀 Employee Portal is running!
+    🔧 First startup detected - auto-configuring database...
+    ✅ Company created: company-1
+    ✅ Database connection created: db-conn-1
+    🎉 Auto-setup complete!
+
+5️⃣  TEST IN BROWSER
+    Open: http://localhost:8000
+
+    Login with mobile number from your Google Sheet
+    Example: 9801675811
+
+================================================================================
+                      RENDER.COM DEPLOYMENT (PRODUCTION)
+================================================================================
+
+1️⃣  PUSH TO GITHUB
+    cd C:\Users\prabh\Desktop\HR_Support
+    git push chat main
+
+2️⃣  CREATE NEW WEB SERVICE ON RENDER
+    - Go to https://dashboard.render.com
+    - Click "New Web Service"
+    - Select GitHub repo: personalised_chatbot
+    - Branch: main
+
+3️⃣  CONFIGURE SERVICE
+    Name: employee-portal (or any name)
+    Runtime: Python 3
+    Build Command: pip install -r requirements.txt
+    Start Command: cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+4️⃣  ADD ENVIRONMENT VARIABLES (EXACT SAME AS .env)
+    DATABASE_URL=sqlite+aiosqlite:///./botivate_master.db
+    JWT_SECRET_KEY=same-as-local-or-generate-new
+    OPENAI_API_KEY=sk-proj-xxxxxxxxxx
+    OPENAI_MODEL=gpt-4o-mini
+    APP_NAME=Employee Portal
+    GOOGLE_SHEET_ID=1SRVhz6oD35pb-wLHOd6TyxSRJcvwvFYeGhlXuScHLHY
+    GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+    SKIP_GOOGLE_AUTH=false
+
+5️⃣  CLICK "CREATE WEB SERVICE"
+    Wait 2-5 minutes for deployment
+
+6️⃣  YOUR APP IS LIVE!
+    URL: https://employee-portal-xxxxx.onrender.com
+    Check status in Render dashboard
+
+================================================================================
+                         WHAT HAPPENS ON FIRST RUN
+================================================================================
+
+When you start the app (local or Render):
+
+✅ Tables are created from SQLAlchemy models
+✅ Company record is created (company-1)
+✅ Database connection is configured
+✅ Pointing to your GOOGLE_SHEET_ID
+✅ No manual database setup needed!
+
+You'll see in logs:
+    🔧 First startup detected - auto-configuring database...
+    ✅ Company created: company-1
+    ✅ Database connection created: db-conn-1
+    🎉 Auto-setup complete!
+
+If you see this again, check:
+    - GOOGLE_SHEET_ID in .env is correct
+    - GOOGLE_SERVICE_ACCOUNT_JSON is valid JSON
+
+================================================================================
+                            TROUBLESHOOTING
+================================================================================
+
+❌ "Unable to load PEM file"
+   → Check GOOGLE_SERVICE_ACCOUNT_JSON is valid JSON (one line, no line breaks)
+
+❌ "No GOOGLE_SHEET_ID found"
+   → Add GOOGLE_SHEET_ID to .env and restart
+
+❌ "Module not found: uvicorn"
+   → Run: pip install -r requirements.txt
+
+❌ "Connection refused to localhost:8000"
+   → Check backend is running and port 8000 is not blocked
+
+❌ Database not auto-setup
+   → Check logs, restart app with correct GOOGLE_SHEET_ID
+
+================================================================================
+                            FILES YOU'LL NEED
+================================================================================
+
+backend/                      - All Python code
+├── app/                      - FastAPI app
+├── static/
+│   └── index.html           - Vanilla JS frontend
+├── requirements.txt         - Python packages
+└── .env                     - Configuration (YOU CREATE THIS)
+
+.env                         - Configuration file (YOU CREATE)
+.env.example                 - Template (reference)
+DEPLOYMENT.md                - Detailed guide
+COMMANDS.txt                 - This file
+
+================================================================================
+                          QUICK REFERENCE
+================================================================================
+
+Generate JWT Secret:
+    python -c "import secrets; print(secrets.token_hex(32))"
+
+Format GOOGLE_SERVICE_ACCOUNT_JSON for .env:
+    {"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
+    All on ONE line with no line breaks
+
+Get GOOGLE_SHEET_ID from URL:
+    https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit
+    Copy the part between /d/ and /edit
+
+================================================================================
+
+That's it! Just follow these steps in order and your system will be deployed!
+
+Questions? Check DEPLOYMENT.md for detailed explanations.
+
+================================================================================
