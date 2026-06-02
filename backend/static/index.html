@@ -221,12 +221,15 @@
         .chat-messages {
             flex: 1;
             overflow-y: auto;
+            overflow-x: hidden;
             padding: 2rem;
             padding-bottom: 280px;
             display: flex;
             flex-direction: column;
             gap: 1.5rem;
             min-height: 0;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
         }
 
         .message {
@@ -327,6 +330,8 @@
             left: 0;
             right: 0;
             width: 100%;
+            border-bottom-left-radius: 16px;
+            border-bottom-right-radius: 16px;
         }
 
         .input-wrapper {
