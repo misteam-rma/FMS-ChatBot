@@ -24,11 +24,16 @@
             --danger: #ef4444;
         }
 
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             background: linear-gradient(135deg, var(--bg) 0%, #1a1f3a 100%);
             color: var(--text);
-            min-height: 100vh;
         }
 
         .login-container {
@@ -130,7 +135,8 @@
             display: none;
             flex: 1;
             flex-direction: column;
-            min-height: 100vh;
+            height: 100vh;
+            overflow: hidden;
             background: linear-gradient(135deg, var(--bg) 0%, #1a1f3a 100%);
         }
 
@@ -145,6 +151,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-shrink: 0;
         }
 
         .header-title {
@@ -212,10 +219,10 @@
             max-width: 1000px;
             margin: 0 auto;
             width: 100%;
+            max-height: 100%;
             box-shadow: 0 20px 60px rgba(0,0,0,0.4);
             overflow: hidden;
             min-height: 0;
-            position: relative;
         }
 
         .chat-messages {
@@ -223,7 +230,6 @@
             overflow-y: auto;
             overflow-x: hidden;
             padding: 2rem;
-            padding-bottom: 280px;
             display: flex;
             flex-direction: column;
             gap: 1.5rem;
@@ -325,13 +331,10 @@
             border-top: 1px solid var(--border);
             padding: 1.5rem;
             background: var(--bg-light);
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
             width: 100%;
             border-bottom-left-radius: 16px;
             border-bottom-right-radius: 16px;
+            flex-shrink: 0;
         }
 
         .input-wrapper {
