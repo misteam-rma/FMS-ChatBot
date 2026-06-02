@@ -22,6 +22,9 @@
             --text-muted: #94a3b8;
             --success: #10b981;
             --danger: #ef4444;
+            --header-height: 88px;
+            --page-padding: clamp(0.75rem, 2vw, 1.5rem);
+            --chat-padding: clamp(1rem, 2.4vw, 2rem);
         }
 
         html,
@@ -40,7 +43,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            min-height: 100vh;
+            min-height: 100dvh;
             padding: 1rem;
         }
 
@@ -135,7 +138,7 @@
             display: none;
             flex: 1;
             flex-direction: column;
-            height: 100vh;
+            height: 100dvh;
             overflow: hidden;
             background: linear-gradient(135deg, var(--bg) 0%, #1a1f3a 100%);
         }
@@ -147,10 +150,12 @@
         .dashboard-header {
             background: var(--bg-light);
             border-bottom: 1px solid var(--border);
-            padding: 1.5rem;
+            min-height: var(--header-height);
+            padding: clamp(1rem, 2vw, 1.5rem);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 1rem;
             flex-shrink: 0;
         }
 
@@ -163,6 +168,7 @@
             display: flex;
             align-items: center;
             gap: 1rem;
+            min-width: 0;
         }
 
         .avatar {
@@ -175,17 +181,22 @@
             justify-content: center;
             font-weight: bold;
             color: white;
+            flex-shrink: 0;
         }
 
         .user-info {
             display: flex;
             flex-direction: column;
             font-size: 0.9rem;
+            min-width: 0;
         }
 
         .user-name {
             font-weight: 600;
             color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .user-id {
@@ -198,11 +209,12 @@
             padding: 0.5rem 1rem;
             width: auto;
             font-size: 0.9rem;
+            flex-shrink: 0;
         }
 
         .dashboard-content {
             flex: 1;
-            padding: 1.5rem;
+            padding: var(--page-padding);
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -220,6 +232,7 @@
             margin: 0 auto;
             width: 100%;
             max-height: 100%;
+            min-width: 0;
             box-shadow: 0 20px 60px rgba(0,0,0,0.4);
             overflow: hidden;
             min-height: 0;
@@ -229,13 +242,14 @@
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
-            padding: 2rem;
+            padding: var(--chat-padding);
             display: flex;
             flex-direction: column;
-            gap: 1.5rem;
+            gap: clamp(0.9rem, 2vw, 1.5rem);
             min-height: 0;
             scrollbar-width: thin;
             scrollbar-color: var(--border) transparent;
+            overscroll-behavior: contain;
         }
 
         .message {
@@ -243,6 +257,7 @@
             gap: 0.75rem;
             animation: slideIn 0.3s ease-out;
             max-width: 85%;
+            min-width: 0;
         }
 
         @keyframes slideIn {
@@ -286,9 +301,11 @@
             color: var(--text);
             line-height: 1.6;
             word-wrap: break-word;
+            overflow-wrap: anywhere;
             overflow-x: auto;
             font-size: 0.95rem;
             white-space: pre-wrap;
+            max-width: 100%;
         }
 
         .message.user .message-bubble {
@@ -329,7 +346,7 @@
 
         .chat-input-area {
             border-top: 1px solid var(--border);
-            padding: 1.5rem;
+            padding: clamp(0.75rem, 2vw, 1.5rem);
             background: var(--bg-light);
             width: 100%;
             border-bottom-left-radius: 16px;
@@ -345,6 +362,8 @@
 
         textarea {
             flex: 1;
+            min-width: 0;
+            min-height: 48px;
             padding: 0.9rem 1.2rem;
             background: var(--bg);
             border: 2px solid var(--border);
@@ -425,6 +444,10 @@
         }
 
         @media (max-width: 768px) {
+            :root {
+                --header-height: 76px;
+            }
+
             .login-card {
                 padding: 1.5rem;
             }
@@ -433,8 +456,17 @@
                 padding: 1rem;
             }
 
+            .chat-container {
+                max-width: none;
+            }
+
+            .message {
+                max-width: 92%;
+            }
+
             .message-bubble {
-                max-width: 85%;
+                padding: 0.85rem 1rem;
+                font-size: 0.92rem;
             }
 
             .header-user {
@@ -443,6 +475,107 @@
 
             .user-info {
                 display: none;
+            }
+        }
+
+        @media (max-width: 560px) {
+            :root {
+                --header-height: 70px;
+                --page-padding: 0;
+                --chat-padding: 0.9rem;
+            }
+
+            .dashboard-header {
+                padding: 0.85rem 1rem;
+            }
+
+            .header-title {
+                font-size: 1.25rem;
+            }
+
+            .avatar {
+                width: 36px;
+                height: 36px;
+            }
+
+            .logout-btn {
+                padding: 0.55rem 0.75rem;
+                font-size: 0.85rem;
+            }
+
+            .chat-container {
+                border-left: 0;
+                border-right: 0;
+                border-radius: 0;
+                box-shadow: none;
+            }
+
+            .chat-input-area {
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+            }
+
+            .message {
+                max-width: 100%;
+                gap: 0.55rem;
+            }
+
+            .message-avatar {
+                width: 34px;
+                height: 34px;
+                font-size: 1rem;
+            }
+
+            .message.user {
+                max-width: 94%;
+            }
+
+            .input-wrapper {
+                gap: 0.5rem;
+            }
+
+            textarea {
+                min-height: 44px;
+                max-height: 96px;
+                padding: 0.75rem 0.85rem;
+                font-size: 0.9rem;
+            }
+
+            .send-btn {
+                width: 44px;
+                height: 44px;
+                border-radius: 9px;
+            }
+        }
+
+        @media (max-width: 380px) {
+            .dashboard-header {
+                gap: 0.6rem;
+            }
+
+            .header-title {
+                font-size: 1.12rem;
+            }
+
+            .logout-btn {
+                padding: 0.5rem 0.65rem;
+            }
+
+            .message-bubble {
+                font-size: 0.88rem;
+            }
+        }
+
+        @media (max-height: 620px) and (min-width: 561px) {
+            :root {
+                --header-height: 68px;
+                --page-padding: 0.75rem;
+                --chat-padding: 1rem;
+            }
+
+            .dashboard-header {
+                padding-top: 0.75rem;
+                padding-bottom: 0.75rem;
             }
         }
 
