@@ -260,16 +260,51 @@
 
         .message-bubble {
             max-width: 70%;
-            padding: 0.75rem 1rem;
+            padding: 1rem;
             border-radius: 12px;
             background: var(--bg);
             color: var(--text);
-            line-height: 1.5;
+            line-height: 1.6;
             word-wrap: break-word;
+            overflow-x: auto;
+        }
+
+        .message-bubble h2 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.1rem;
+            color: var(--secondary);
+        }
+
+        .message-bubble h3 {
+            margin: 0.75rem 0 0.5rem 0;
+            font-size: 1rem;
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .message-bubble ul, .message-bubble ol {
+            margin: 0.5rem 0;
+            padding-left: 1.5rem;
+        }
+
+        .message-bubble li {
+            margin-bottom: 0.25rem;
+        }
+
+        .message-bubble strong {
+            color: var(--secondary);
+            font-weight: 600;
         }
 
         .message.user .message-bubble {
             background: var(--primary);
+            color: white;
+            max-width: 60%;
+        }
+
+        .message.user .message-bubble h2,
+        .message.user .message-bubble h3,
+        .message.user .message-bubble strong {
             color: white;
         }
 
@@ -523,6 +558,28 @@
             location.reload();
         }
 
+        // ===== Markdown Rendering =====
+        function markdownToHtml(text) {
+            let html = text;
+
+            // Headers
+            html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+            html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+
+            // Bold
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+
+            // Lists - convert bullet points
+            html = html.replace(/^- (.*?)$/gm, '<li>$1</li>');
+            html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+
+            // Line breaks
+            html = html.replace(/\n/g, '<br>');
+
+            return html;
+        }
+
         // ===== Chat =====
         let messages = [];
 
@@ -550,7 +607,13 @@
 
                 const bubble = document.createElement('div');
                 bubble.className = 'message-bubble';
-                bubble.textContent = msg.text;
+
+                // Render markdown for AI messages
+                if (msg.type === 'ai') {
+                    bubble.innerHTML = markdownToHtml(msg.text);
+                } else {
+                    bubble.textContent = msg.text;
+                }
 
                 if (msg.type === 'user') {
                     div.appendChild(bubble);
