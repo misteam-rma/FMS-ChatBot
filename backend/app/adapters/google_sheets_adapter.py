@@ -36,7 +36,17 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         self._headers_cache: Dict[str, List[str]] = {}
 
     async def connect(self, config: Dict[str, Any], refresh_token: Optional[str] = None) -> None:
-        """Connect to Google Sheets using the HR's OAuth refresh token."""
+        """Connect to Google Sheets using the HR's OAuth refresh token OR service account JSON."""
+        import os
+
+        # For local testing/demo: skip auth if in development mode
+        if os.getenv("SKIP_GOOGLE_AUTH") == "true":
+            print("[GOOGLE SHEETS] ⚠️ DEMO MODE: Skipping Google authentication")
+            # In demo mode, we'll use a mock client that simulates the sheet data
+            self.client = None
+            self.is_demo_mode = True
+            return
+
         print(f"[GOOGLE SHEETS] 🔌 Connecting to Database using config...")
         raw_spreadsheet_input = config.get("spreadsheet_id", "")
         sheet_name = config.get("sheet_name", None)
@@ -44,7 +54,7 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         if not raw_spreadsheet_input:
             print("[GOOGLE SHEETS] ❌ ERROR: spreadsheet_id is missing from connection_config.")
             raise ValueError("spreadsheet_id (or a link) is required in connection_config.")
-            
+
         # Extract ID if a full URL is provided
         spreadsheet_id = raw_spreadsheet_input
         if "spreadsheets/d/" in raw_spreadsheet_input:
@@ -55,19 +65,44 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         if not refresh_token:
             refresh_token = config.get("google_refresh_token")
 
-        if not refresh_token:
-            print("[GOOGLE SHEETS] ❌ ERROR: No OAuth refresh_token provided for company.")
+        # Try service account JSON as fallback for local testing
+        service_account_json = config.get("google_service_account_json") or settings.google_service_account_json
+
+        if not refresh_token and not service_account_json:
+            print("[GOOGLE SHEETS] ❌ ERROR: No OAuth refresh_token or service account JSON provided.")
             raise ValueError("Company must connect their Google Workspace first to access the sheet.")
 
-        # Rebuild OAuth credentials using the stored refresh token
-        credentials = Credentials(
-            None, # Empty access token (force refresh)
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=settings.google_oauth_client_id,
-            client_secret=settings.google_oauth_client_secret
-        )
-        self.client = gspread.authorize(credentials)
+        # Try OAuth first, then fallback to service account
+        try:
+            if service_account_json and not refresh_token:
+                # Use service account JSON (for local testing)
+                try:
+                    service_account_dict = json.loads(service_account_json) if isinstance(service_account_json, str) else service_account_json
+                    self.client = gspread.service_account_from_dict(service_account_dict)
+                    print("[GOOGLE SHEETS] ✓ Using service account credentials from JSON")
+                except (json.JSONDecodeError, ValueError) as json_err:
+                    print(f"[GOOGLE SHEETS] ⚠️ Failed to parse service account JSON: {json_err}")
+                    print("[GOOGLE SHEETS] Trying to load from file: backend/service-account.json")
+                    try:
+                        self.client = gspread.service_account(filename="service-account.json")
+                        print("[GOOGLE SHEETS] ✓ Using service account credentials from file")
+                    except Exception as file_err:
+                        print(f"[GOOGLE SHEETS] ❌ Failed to load from file: {file_err}")
+                        raise ValueError(f"Could not load service account: {json_err}")
+            else:
+                # Use OAuth refresh token
+                credentials = Credentials(
+                    None, # Empty access token (force refresh)
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=settings.google_oauth_client_id,
+                    client_secret=settings.google_oauth_client_secret
+                )
+                self.client = gspread.authorize(credentials)
+                print("[GOOGLE SHEETS] ✓ Using OAuth credentials")
+        except Exception as e:
+            print(f"[GOOGLE SHEETS] ❌ ERROR: Could not authorize with Google: {e}")
+            raise
 
         self.spreadsheet = self.client.open_by_key(spreadsheet_id)
         print(f"[GOOGLE SHEETS] ✅ SUCCESS: Connected to Spreadsheet '{self.spreadsheet.title}' (ID: {spreadsheet_id})")

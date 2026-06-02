@@ -29,10 +29,9 @@ def verify_token(token: str) -> TokenPayload:
     try:
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         return TokenPayload(
-            company_id=payload.get("company_id", ""),
             employee_id=payload.get("employee_id", ""),
             employee_name=payload.get("employee_name", ""),
-            role=payload.get("role", "employee"),
+            mobile_number=payload.get("mobile_number", ""),
         )
     except JWTError:
         raise HTTPException(

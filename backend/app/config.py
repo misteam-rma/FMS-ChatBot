@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # --- Upload Directories ---
     upload_dir: str = "./uploads"
 
+    # --- Development/Demo Mode ---
+    skip_google_auth: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

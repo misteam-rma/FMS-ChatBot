@@ -112,12 +112,9 @@ class EmployeeDataUpdateRequest(BaseModel):
 # ── Auth Schemas ──────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    company_id: str
-    employee_id: str
-    password: str
-    role: Optional[UserRole] = None  # ignored by backend — role determined from DB
+    mobile_number: str
 
-    @field_validator('company_id', 'employee_id')
+    @field_validator('mobile_number')
     @classmethod
     def strip_whitespace(cls, v):
         return v.strip() if isinstance(v, str) else v
@@ -128,16 +125,13 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     employee_id: str
     employee_name: str
-    company_id: str
-    company_name: str
-    role: UserRole
+    mobile_number: str
 
 
 class TokenPayload(BaseModel):
-    company_id: str
     employee_id: str
     employee_name: str
-    role: UserRole
+    mobile_number: str
     exp: Optional[datetime] = None
 
 

@@ -6,8 +6,6 @@ import './App.css';
 // Lazy loading pages for better performance
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
-const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
-const OAuthCallbackPage = lazy(() => import('./pages/OAuthCallbackPage'));
 
 function App() {
   return (
@@ -28,9 +26,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/onboarding" element={<OnboardingPage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </Suspense>
