@@ -78,11 +78,13 @@ fix_urls.py
 backend/setup_data.py
 render.yaml
 
-# Temporary documentation
+# Temporary documentation (keep deployment guides)
 *.md
 !DEPLOYMENT.md
 *.txt
 !COMMANDS.txt
+!FINAL_SETUP.txt
+backend/runtime.txt
 
 # Old folders
 frontend/
