@@ -820,6 +820,8 @@
 
                 authToken = data.access_token;
                 userInfo = data;
+                // Override name to show "Admin" instead of "Administrator"
+                userInfo.employee_name = 'Admin';
 
                 localStorage.setItem('auth_token', authToken);
                 localStorage.setItem('user_info', JSON.stringify(userInfo));

@@ -197,7 +197,7 @@ async def verify_admin(data: AdminLoginRequest):
     print(f"[AUTH LOG] Creating JWT token for admin...")
     token_data = {
         "employee_id": "admin",
-        "employee_name": "Administrator",
+        "employee_name": "Admin",
         "mobile_number": "",
         "user_type": "admin",
     }
@@ -208,7 +208,7 @@ async def verify_admin(data: AdminLoginRequest):
     return LoginResponse(
         access_token=access_token,
         employee_id="admin",
-        employee_name="Administrator",
+        employee_name="Admin",
         mobile_number="",
         user_type="admin",
     )
