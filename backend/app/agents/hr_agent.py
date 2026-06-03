@@ -386,14 +386,22 @@ async def handle_data_query(state: AgentState) -> AgentState:
         # Step 4: Ask LLM to answer from verified data
         llm = get_llm()
         print(f"[{state['company_id']}][AGENT DATA QUERY] Context prepared. Sending context to AI (Length: {len(data_context) + len(extra_context)} chars).")
-        
-        answer_prompt = f"""You are an HR assistant at {state.get('company_name', 'the company')}. Answer the employee's question using ONLY the data below.
 
-IMPORTANT: The logged-in employee is {state['employee_name']} (ID: {state['employee_id']}).
+        # Different prompt for admin vs employee
+        if role == "admin":
+            data_context_label = "Available Database:"
+            permission_note = "You are an ADMIN user with full access to the entire employee database. You can answer questions about any employee, department, or generate reports."
+        else:
+            data_context_label = "Your Employee Record:"
+            permission_note = "You are a regular employee. You can only answer questions about your own data."
+
+        answer_prompt = f"""You are an HR assistant at {state.get('company_name', 'the company')}. Answer the question using ONLY the data below.
+
+Access Level: {permission_note}
+Logged-in User: {state['employee_name']} (ID: {state['employee_id']})
 Company Name: {state.get('company_name', 'Not specified')}
-When they ask "my details", "my data", or "my company name", ONLY use the data provided above.
 
-Logged-in Employee's Data:
+{data_context_label}
 {data_context}
 {extra_context}
 
@@ -401,15 +409,10 @@ Question: {state['current_input']}
 
 Rules:
 - Answer ONLY from the data provided.
-- When asked about "my" details, ONLY use the logged-in employee's data above.
 - If the data does not contain the answer, say "I don't have this information in the database."
-- Be professional. 
-- FORMATTING RULES: 
-  - Use clear SECTION HEADERS (e.g. ### Leave Summary).
-  - Use BULLETED LISTS for multiple fields.
-  - DO NOT just dump a single paragraph.
-  - Use bold sparingly for keys.
-  - Use DOUBLE NEWLINES between sections for readability.
+- Be professional and concise.
+- For numeric questions, provide calculations and summaries.
+- For listing questions, show results in bullet format.
 """
         response = await llm.ainvoke([HumanMessage(content=answer_prompt)])
         state["response"] = response.content.strip()
