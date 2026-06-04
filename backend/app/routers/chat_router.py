@@ -1,7 +1,7 @@
 """
-Botivate HR Support - Chat API Router (Simplified)
-Employees can only chat about their own information.
-No approval workflows, no manager features.
+Finance FMS - Chat API Router
+Authenticated users can chat about their own RAW DATA record.
+Admins can query the workbook more broadly.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,8 +15,83 @@ from app.utils.auth import get_current_user
 from app.agents.hr_agent import chat_with_agent
 from app.adapters.adapter_factory import get_adapter
 from app.services.company_service import get_company
+from app.config import settings
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def extract_client_name_query(user_message: str) -> str | None:
+    quoted_match = re.search(r'client\s+"([^"]+)"', user_message, re.IGNORECASE)
+    if quoted_match:
+        return quoted_match.group(1).strip()
+
+    plain_match = re.search(r"client\s+([a-z0-9&.,()'\\/\-\s]+)", user_message, re.IGNORECASE)
+    if plain_match:
+        candidate = plain_match.group(1).strip(" .?!")
+        if candidate:
+            return candidate
+    return None
+
+
+def format_client_record(record: dict) -> str:
+    sections = {
+        "Client Information": ["Client Name", "Client Job Code", "Mobile Number", "Concerned Person"],
+        "Loan Details": [
+            "Project Name",
+            "Proposal Type",
+            "Term Loan Amt (Cr)",
+            "CC Amt (Cr)",
+            "BG Amt (Cr)",
+            "LC Amt (Cr)",
+            "OD Amt (Cr)",
+            "LAP Amt (Cr)",
+            "Sublimit of CC (LC/BG/WCDL) Amt (Cr)",
+            "Total Loan Amount",
+        ],
+        "Team Details": ["Team Leader", "Team Engaged"],
+        "Documents": ["Attachment URL", "Mail Status"],
+    }
+
+    reply_parts = []
+    for section, fields in sections.items():
+        section_data = {}
+        for field in fields:
+            for key, value in record.items():
+                if key.lower() == field.lower() and value not in (None, ""):
+                    section_data[key] = value
+
+        if section_data:
+            reply_parts.append(f"\n{section}:")
+            for key, value in section_data.items():
+                reply_parts.append(f"  • {key}: {value}")
+
+    if reply_parts:
+        return "\n".join(reply_parts).strip()
+
+    return "\n".join(
+        ["Client Record:"] + [f"  • {key}: {value}" for key, value in record.items() if value not in (None, "")]
+    )
+
+
+def format_client_list(records: list[dict], limit: int = 50) -> str:
+    visible = records[:limit]
+    lines = [f"Total clients in RAW DATA: {len(records)}", ""]
+    for idx, rec in enumerate(visible, start=1):
+        name = rec.get("Client Name") or "Unknown Client"
+        code = rec.get("Client Job Code") or "N/A"
+        mobile = rec.get("Mobile Number") or "N/A"
+        project = rec.get("Project Name") or "N/A"
+        lines.append(f"{idx}. {name} | Code: {code} | Mobile: {mobile} | Project: {project}")
+
+    if len(records) > limit:
+        lines.append("")
+        lines.append(f"Showing first {limit} clients.")
+
+    return "\n".join(lines)
 
 
 @router.post("/send", response_model=ChatResponse)
@@ -62,28 +137,28 @@ async def send_message(
     print(f"[CHAT LOG] 🔗 Active DB connection found")
 
     schema_map = db_conn.schema_map
-    primary_key_col = schema_map.get("primary_key", "")
+    master_table = schema_map.get("master_table") or settings.google_employee_sheet_name
 
-    # Fetch employee data from external DB
+    # Fetch authenticated user's RAW DATA record or admin context from external workbook
     employee_data = {}
     all_records = []
     try:
         adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
-        primary_key = schema_map.get("primary_key", "")
+        primary_key = schema_map.get("primary_key", "Client Job Code")
 
-        all_records = await adapter.get_all_records()
+        all_records = await adapter.get_all_records(table_name=master_table)
 
         # For admin: access all records
         # For employee: access only their own record
         if user_type == "admin":
-            print(f"[CHAT LOG] ✅ Admin access - fetched all {len(all_records)} records")
+            print(f"[CHAT LOG] ✅ Admin access - fetched all {len(all_records)} RAW DATA records")
         else:
-            # Employee: filter to only their record
+            # User/client: filter to only their own RAW DATA record
             for rec in all_records:
                 rec_id = str(rec.get(primary_key, "")).strip()
                 if rec_id == employee_id.strip():
                     employee_data = rec
-                    print(f"[CHAT LOG] ✅ Found employee record")
+                    print(f"[CHAT LOG] ✅ Found authenticated RAW DATA record")
                     break
 
             if not employee_data:
@@ -94,50 +169,37 @@ async def send_message(
 
     print(f"[CHAT LOG] Processing message directly from employee data...")
     try:
-        # Simple direct response using employee data (no LLM overhead)
+        # Simple direct response using RAW DATA (no LLM overhead)
         user_msg = data.message.lower()
         reply = None
 
         # Check for simple greetings (whole words only)
         if re.search(r"\b(hello|hi|hey|namaste)\b", user_msg):
-            reply = f"Hello {user.employee_name}! 👋 How can I help you with your information today?"
+            reply = f"Hello {user.employee_name}! 👋 How can I help you with your Finance FMS information today?"
 
-        # Check for "tell me about me" or "my data" - ONLY for employees, admins should use agent for any query
+        elif user_type == "admin" and re.search(r"\b(list|show)\s+all\s+(the\s+)?clients\b", user_msg):
+            reply = format_client_list(all_records)
+
+        elif user_type == "admin":
+            client_name_query = extract_client_name_query(data.message)
+            if client_name_query:
+                normalized_query = normalize_text(client_name_query)
+                matched_record = None
+                for rec in all_records:
+                    client_name = normalize_text(rec.get("Client Name", ""))
+                    if client_name == normalized_query or normalized_query in client_name:
+                        matched_record = rec
+                        break
+
+                if matched_record:
+                    reply = format_client_record(matched_record)
+
+        # Check for "tell me about me" or "my data" - ONLY for normal users, admins should use agent for any query
         elif user_type == "employee" and any(word in user_msg for word in ["tell", "show", "my data", "my details", "about me", "who am i"]):
             if employee_data:
-                # Format employee data in plain text with sections
-                reply_parts = []
-
-                # Group by sections
-                sections = {
-                    "Personal Information": ["Employee Name", "Email", "Phone Number", "Date of Birth", "Gender", "Blood Group"],
-                    "Employment Details": ["Employee ID", "Department", "Designation", "Date of Joining", "Employment Type", "Manager", "Work Location"],
-                    "Leave Information": ["Total Leave Balance", "Leaves Taken (This Year)", "Leaves Remaining", "Last Leave From Date", "Last Leave To Date"],
-                    "Performance": ["Performance Rating", "Projects Assigned", "Skills", "Certifications", "Task Completion Rate"]
-                }
-
-                for section, fields in sections.items():
-                    section_data = {}
-                    for field in fields:
-                        for key, value in employee_data.items():
-                            if key.lower() == field.lower() and value:
-                                section_data[key] = value
-
-                    if section_data:
-                        reply_parts.append(f"\n{section}:")
-                        for key, value in section_data.items():
-                            reply_parts.append(f"  • {key}: {value}")
-
-                if reply_parts:
-                    reply = "\n".join(reply_parts).strip()
-                else:
-                    # If no sections matched, show all data
-                    reply = "Your Information:\n"
-                    for key, value in employee_data.items():
-                        if value and key.lower() not in ["employee id"]:
-                            reply += f"  • {key}: {value}\n"
+                reply = format_client_record(employee_data)
             else:
-                reply = f"I couldn't find your employee record. Your ID is {employee_id}."
+                reply = f"I couldn't find your RAW DATA record. Your Client Job Code is {employee_id}."
 
         # Default: pass to agent for complex queries
         if not reply:

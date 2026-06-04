@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:5173/oauth/callback"
+    google_employee_sheet_name: str = "RAW DATA"
+    google_admin_sheet_name: str = "Admin"
 
     # --- SMTP Email ---
     smtp_host: str = "smtp.gmail.com"
@@ -41,10 +43,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 480
 
-    # --- Admin Login (Hardcoded) ---
-    admin_username: str = "admin"
-    admin_password: str = "admin123"
-
     # --- ChromaDB ---
     chroma_persist_dir: str = "./chroma_data"
 
@@ -55,7 +53,7 @@ class Settings(BaseSettings):
     skip_google_auth: bool = False
 
     class Config:
-        env_file = ".env"
+        env_file = (".env", "../.env")
         env_file_encoding = "utf-8"
 
 

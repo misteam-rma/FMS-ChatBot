@@ -1,7 +1,6 @@
 """
-Botivate HR Support - Authentication API Router
-Mobile number verification system - employees access only their own data
-Uses Google Sheets for employee data
+Finance FMS - Authentication API Router
+Mobile number verification for client/user access and sheet-backed admin login.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,6 +22,61 @@ class AdminLoginRequest(BaseModel):
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 
+def normalize_phone(value: str) -> str:
+    """Normalize phone numbers for sheet matching."""
+    return (
+        str(value or "")
+        .strip()
+        .replace(" ", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("+91", "")
+    )
+
+
+def get_first_value(record: dict, candidates: list[str], default: str = "") -> str:
+    """Return the first non-empty value from a record using case-insensitive column names."""
+    lower_key_map = {str(k).strip().lower(): k for k in record.keys()}
+    for candidate in candidates:
+        key = lower_key_map.get(candidate.strip().lower())
+        if key is not None:
+            value = str(record.get(key, "")).strip()
+            if value:
+                return value
+    return default
+
+
+async def get_active_connection(db: AsyncSession) -> tuple[Company, DatabaseConnection]:
+    """Fetch the active company and Google Sheets connection."""
+    result = await db.execute(select(Company).where(Company.is_active == True))
+    company = result.scalars().first()
+
+    if not company:
+        print("[AUTH LOG] ❌ FAILED: No active company found.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="System not configured.",
+        )
+
+    result = await db.execute(
+        select(DatabaseConnection).where(
+            DatabaseConnection.company_id == company.id,
+            DatabaseConnection.is_active == True,
+        )
+    )
+    db_conn = result.scalars().first()
+
+    if not db_conn or not db_conn.schema_map:
+        print("[AUTH LOG] ❌ FAILED: Database not configured.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="System database not configured.",
+        )
+
+    return company, db_conn
+
+
 @router.post("/verify-mobile", response_model=LoginResponse)
 async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
@@ -42,35 +96,10 @@ async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     # Step 1: Get the first active company
     print(f"[AUTH LOG] Step 1: Fetching company configuration...")
-    result = await db.execute(
-        select(Company).where(Company.is_active == True)
-    )
-    company = result.scalars().first()
-
-    if not company:
-        print(f"[AUTH LOG] ❌ FAILED: No active company found.")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="System not configured.",
-        )
+    company, db_conn = await get_active_connection(db)
     print(f"[AUTH LOG] ✅ Company: '{company.name}'")
 
     # Step 2: Get active database connection (Google Sheets)
-    print(f"[AUTH LOG] Step 2: Fetching database connection...")
-    result = await db.execute(
-        select(DatabaseConnection).where(
-            DatabaseConnection.company_id == company.id,
-            DatabaseConnection.is_active == True,
-        )
-    )
-    db_conn = result.scalars().first()
-
-    if not db_conn or not db_conn.schema_map:
-        print(f"[AUTH LOG] ❌ FAILED: Database not configured.")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="System database not configured.",
-        )
     print(f"[AUTH LOG] ✅ DB Type: {db_conn.db_type}")
 
     # Step 3: Get adapter and schema
@@ -85,18 +114,9 @@ async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
             detail=f"Database connection failed: {str(e)}"
         )
 
-    # Step 4: Find phone column in schema
-    phone_column = schema.get("phone", "")
-    if not phone_column:
-        categories = schema.get("categories") or {}
-        for category_fields in categories.values():
-            for col_name in category_fields:
-                col_lower = str(col_name).lower()
-                if any(token in col_lower for token in ["phone", "mobile", "contact", "whatsapp"]):
-                    phone_column = col_name
-                    break
-            if phone_column:
-                break
+    # Step 4: Use RAW DATA / Mobile Number for Finance FMS authentication
+    master_table = schema.get("master_table") or settings.google_employee_sheet_name
+    phone_column = schema.get("phone") or "Mobile Number"
 
     if not phone_column:
         print(f"[AUTH LOG] ❌ Phone column not found in schema")
@@ -108,19 +128,16 @@ async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     print(f"[AUTH LOG] Step 4: Phone column = '{phone_column}'")
 
     # Step 5: Search for employee in Google Sheet
-    print(f"[AUTH LOG] Step 5: Searching Google Sheet for mobile: '{mobile_number}'...")
+    print(f"[AUTH LOG] Step 5: Searching '{master_table}' for mobile: '{mobile_number}'...")
     try:
-        all_records = await adapter.get_all_records()
+        all_records = await adapter.get_all_records(table_name=master_table)
         print(f"[AUTH LOG] Total records in sheet: {len(all_records)}")
 
         employee = None
         for idx, record in enumerate(all_records):
             stored_mobile = str(record.get(phone_column, "")).strip()
-            # Normalize both numbers (remove spaces, dashes)
-            stored_normalized = stored_mobile.replace(" ", "").replace("-", "")
-            input_normalized = mobile_number.replace(" ", "").replace("-", "")
 
-            if stored_normalized == input_normalized:
+            if normalize_phone(stored_mobile) == normalize_phone(mobile_number):
                 employee = record
                 print(f"[AUTH LOG] ✅ MATCH FOUND at row {idx + 2}")
                 break
@@ -143,11 +160,11 @@ async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     # Step 6: Extract employee information
     print(f"[AUTH LOG] Step 6: Extracting employee data...")
-    primary_key_col = schema.get("primary_key", "Employee ID")
-    name_col = schema.get("employee_name", "Employee Name")
+    primary_key_col = schema.get("primary_key", "Client Job Code")
+    name_col = schema.get("employee_name", "Client Name")
 
     employee_id = str(employee.get(primary_key_col, "")).strip()
-    employee_name = str(employee.get(name_col, "Employee")).strip()
+    employee_name = str(employee.get(name_col, "User")).strip()
 
     if not employee_id:
         print(f"[AUTH LOG] ⚠️ Employee ID is empty, using mobile as fallback")
@@ -179,16 +196,51 @@ async def verify_mobile(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/verify-admin", response_model=LoginResponse)
-async def verify_admin(data: AdminLoginRequest):
+async def verify_admin(data: AdminLoginRequest, db: AsyncSession = Depends(get_db)):
     """
-    Admin login with hardcoded credentials.
-    Admin has full unrestricted access to entire Google Sheet.
+    Admin login backed by the Finance FMS Admin worksheet.
+    Admin has full unrestricted access to the workbook.
     """
     print(f"\n[AUTH LOG] 🔐 Starting Admin Verification")
     print(f"[AUTH LOG] Username: '{data.username}'")
 
-    # Validate credentials
-    if data.username != settings.admin_username or data.password != settings.admin_password:
+    company, db_conn = await get_active_connection(db)
+
+    try:
+        adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
+        admin_records = await adapter.get_all_records(table_name=settings.google_admin_sheet_name)
+        print(f"[AUTH LOG] Admin records loaded: {len(admin_records)}")
+    except Exception as e:
+        print(f"[AUTH LOG] ❌ ERROR loading Admin sheet: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Admin sheet authentication failed: {str(e)}",
+        )
+
+    username_input = str(data.username or "").strip().lower()
+    password_input = str(data.password or "").strip()
+    matched_admin = None
+
+    for record in admin_records:
+        username = get_first_value(
+            record,
+            ["Username", "User Name", "Admin Username", "Email", "Email ID", "Mobile Number", "Phone"],
+        )
+        password = get_first_value(
+            record,
+            ["Password", "Admin Password", "Passcode", "PIN", "Pin"],
+        )
+        is_active = get_first_value(record, ["IsActive", "Active", "Status"], "TRUE").lower()
+
+        if not username or not password:
+            continue
+        if is_active in {"false", "no", "inactive", "disabled", "0"}:
+            continue
+        if username.strip().lower() == username_input and password == password_input:
+            matched_admin = record
+            break
+
+    if not matched_admin:
         print(f"[AUTH LOG] ❌ FAILED: Invalid admin credentials")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -199,10 +251,14 @@ async def verify_admin(data: AdminLoginRequest):
 
     # Create JWT token for admin
     print(f"[AUTH LOG] Creating JWT token for admin...")
+    admin_name = get_first_value(matched_admin, ["Name", "Admin Name", "Full Name"], "Admin")
+    admin_id = get_first_value(matched_admin, ["Admin ID", "ID", "User ID", "Username"], data.username)
+    admin_mobile = get_first_value(matched_admin, ["Mobile Number", "Phone", "WhatsApp"], "")
+
     token_data = {
-        "employee_id": "admin",
-        "employee_name": "Admin",
-        "mobile_number": "",
+        "employee_id": admin_id,
+        "employee_name": admin_name,
+        "mobile_number": admin_mobile,
         "user_type": "admin",
     }
     access_token = create_access_token(token_data)
@@ -211,8 +267,8 @@ async def verify_admin(data: AdminLoginRequest):
 
     return LoginResponse(
         access_token=access_token,
-        employee_id="admin",
-        employee_name="Admin",
-        mobile_number="",
+        employee_id=admin_id,
+        employee_name=admin_name,
+        mobile_number=admin_mobile,
         user_type="admin",
     )

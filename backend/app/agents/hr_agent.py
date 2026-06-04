@@ -1,9 +1,12 @@
 """
-Botivate HR Support - LangGraph Agentic Chatbot Engine
-Core agent with nodes for Intent Understanding, Policy Search, DB Query, and Approval Routing.
+Finance FMS - LangGraph Agentic Chatbot Engine
+Core agent with nodes for intent understanding and sheet-backed data answers.
 """
 
 import json
+import os
+import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, TypedDict, Annotated
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -26,6 +29,7 @@ class AgentState(TypedDict):
     schema_map: Dict[str, Any]
     db_config: Dict[str, Any]
     db_type: str
+    workbook_context: str
 
     # Conversation
     messages: List[Dict[str, str]]     # Chat history
@@ -36,7 +40,7 @@ class AgentState(TypedDict):
     actions: List[Dict[str, Any]]      # Interactive actions (buttons, etc.)
 
     # Data context
-    employee_data: Dict[str, Any]      # Full employee record
+    employee_data: Any                 # Authenticated user's record or admin-visible rows
     query_result: Optional[str]        # DB query result
     policy_answer: Optional[str]       # RAG search result
     approval_needed: bool              # Whether approval workflow was triggered
@@ -56,15 +60,186 @@ def get_llm() -> ChatOpenAI:
     )
 
 
+@lru_cache(maxsize=1)
+def get_workbook_context() -> str:
+    """Load the Finance FMS workbook description used as LLM context."""
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    description_path = os.path.join(repo_dir, "description.txt")
+    try:
+        with open(description_path, "r", encoding="utf-8") as f:
+            return f.read()[:28000]
+    except Exception as e:
+        print(f"[AGENT CONTEXT] Failed to load description.txt: {e}")
+        return ""
+
+
+def get_relevant_table_names(question: str, schema_map: Dict[str, Any], role: str) -> List[str]:
+    """Select Finance FMS worksheets likely needed for the current question."""
+    child_tables = schema_map.get("child_tables") or {}
+    available = set(child_tables.keys())
+    q = question.lower()
+
+    candidates: List[str] = []
+
+    doer_keywords = ["doer", "deor", "door", "owner", "assignee", "assigned", "responsible"]
+
+    keyword_map = {
+        "query": ["Query_Master", "Form_Record_Responses", "Form_Reply_Responses", "Client Docs Index"],
+        "reply": ["Query_Master", "Form_Reply_Responses", "Client Docs Index"],
+        "report": ["Report Upload Form", "RUF Help Sheet", "NEW DASH", "NEW DASH BANK"],
+        "upload": ["Report Upload Form", "RUF Help Sheet"],
+        "sanction": ["Sanction Letter", "Post sanction", "FMS2", "FMS4"],
+        "disbur": ["Post sanction", "FMS2", "FMS4", "Completed Dash"],
+        "status": ["Status Update", "Status Dash", "Manualy Status Dash", "NEW DASH", "NEW DASH BANK"],
+        "complete": ["Completed Dash"],
+        "done": ["Completed Dash", "Status Dash"],
+        "drop": ["Drop Dash", "Dash Help Sheet - DND"],
+        "bank": ["NEW DASH BANK", "Bank & Email ID", "RAW DATA2"],
+        "branch": ["NEW DASH BANK", "Bank & Email ID", "RAW DATA2"],
+        "team": ["TEAM MEMBER", "TeamMatrix", "Doer Emails", "NEW DASH"],
+        "doer": ["FMS1", "FMS2", "FMS3", "FMS4", "DB_Format", "Doer Emails", "TEAM MEMBER", "DATA"],
+        "mail": ["Mail Log", "Doer Emails", "TEAM MEMBER"],
+        "whatsapp": ["WhatsAppUsers", "ChatMessages", "Config"],
+        "step": ["Steps", "StepMatrix", "Steps Directory", "NEW DASH for pc", "FMS1", "FMS2", "FMS3", "FMS4"],
+        "dashboard": ["NEW DASH", "NEW DASH BANK", "NEW DASH for pc"],
+        "agrasen": ["Agrasen Group"],
+        "client": ["CLIENT DATA", "RAW DATA2"],
+        "loan": ["RAW DATA", "RAW DATA2", "CLIENT DATA", "NEW DASH"],
+        "amount": ["RAW DATA", "RAW DATA2", "CLIENT DATA", "NEW DASH"],
+    }
+
+    for keyword, tables in keyword_map.items():
+        if keyword in q:
+            candidates.extend(tables)
+
+    if any(keyword in q for keyword in doer_keywords):
+        candidates.extend(["FMS1", "FMS2", "FMS3", "FMS4", "DB_Format", "Doer Emails", "TEAM MEMBER", "DATA"])
+
+    if not candidates:
+        if any(token in q for token in ["client", "loan", "project", "amount", "mobile", "job code"]):
+            candidates.extend(["RAW DATA2"])
+        elif any(token in q for token in ["status", "pending", "done", "complete", "dropped"]):
+            candidates.extend(["Status Update", "Status Dash"])
+        elif role == "admin":
+            candidates.extend(["RAW DATA2"])
+
+    if role == "admin" and any(token in q for token in ["all", "total", "summary", "portfolio", "dashboard"]):
+        candidates.extend(["NEW DASH", "NEW DASH BANK", "Completed Dash", "Drop Dash", "Post sanction"])
+
+    selected = []
+    for table in candidates:
+        if table in available and table not in selected:
+            selected.append(table)
+        if len(selected) >= 6:
+            break
+    return selected
+
+
+def filter_related_records(records: List[Dict[str, Any]], identifiers: List[str], limit: int = 25) -> List[Dict[str, Any]]:
+    """Keep records that mention any identifier in any cell."""
+    normalized = [i.strip().lower() for i in identifiers if i and i.strip()]
+    if not normalized:
+        return records[:limit]
+
+    matches = []
+    for record in records:
+        values = [str(v).strip().lower() for v in record.values()]
+        joined = " | ".join(values)
+        if any(identifier in joined for identifier in normalized):
+            matches.append(record)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def compact_record(record: Dict[str, Any], preferred_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Return a smaller record payload to reduce LLM context size."""
+    preferred_fields = preferred_fields or [
+        "Client Name",
+        "Client Job Code",
+        "Mobile Number",
+        "Project Name",
+        "Proposal Type",
+        "Total Loan Amount",
+        "Team Leader",
+        "Team Engaged",
+        "Concerned Person",
+        "Mail Status",
+        "Status",
+        "Bank",
+        "Branch",
+    ]
+    compact = {}
+    lower_map = {key.lower(): key for key in record.keys()}
+    for field in preferred_fields:
+        key = lower_map.get(field.lower())
+        if key and record.get(key) not in (None, "", []):
+            compact[key] = record[key]
+
+    if compact:
+        for key, value in record.items():
+            key_lower = key.lower()
+            if value not in (None, "", []) and any(
+                token in key_lower for token in ["doer", "planned", "actual", "status", "remark", "url", "job code"]
+            ):
+                compact[key] = value
+        return compact
+
+    # Fallback: keep only non-empty values and cap size.
+    compact = {}
+    for key, value in record.items():
+        if value not in (None, "", []):
+            compact[key] = value
+        if len(compact) >= 12:
+            break
+    return compact
+
+
+def extract_query_identifiers(question: str, admin_records: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Extract likely record identifiers from the query to narrow admin context."""
+    identifiers: List[str] = []
+    quoted = re.findall(r'"([^"]+)"', question)
+    identifiers.extend([value.strip() for value in quoted if value.strip()])
+
+    client_match = re.search(r"client\s+([a-z0-9&.,()'\\/\-\s]+)", question, re.IGNORECASE)
+    if client_match:
+        candidate = client_match.group(1).strip(" .?!")
+        if candidate:
+            identifiers.append(candidate)
+
+    code_match = re.search(r"\b[A-Z]{2,}\d+\b", question)
+    if code_match:
+        identifiers.append(code_match.group(0))
+
+    if admin_records and not identifiers:
+        lowered_question = question.lower()
+        for record in admin_records:
+            client_name = str(record.get("Client Name", "")).strip()
+            if client_name and client_name.lower() in lowered_question:
+                identifiers.append(client_name)
+                break
+
+    seen = set()
+    unique = []
+    for value in identifiers:
+        key = value.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    return unique
+
+
 # ── Node 1: Intent Understanding ─────────────────────────
 
 async def understand_intent(state: AgentState) -> AgentState:
     """Classify the user's intent(s) — supports multi-intent detection."""
     llm = get_llm()
 
-    prompt = f"""You are an intent classifier for an HR Support chatbot.
+    workbook_context = state.get("workbook_context") or ""
 
-Employee: {state['employee_name']} (ID: {state['employee_id']}, Role: {state['role']})
+    prompt = f"""You are an intent classifier for a Finance FMS chatbot.
+
+User: {state['employee_name']} (ID: {state['employee_id']}, Role: {state['role']})
 Company: {state.get('company_name', 'Unknown')}
 
 The user said: "{state['current_input']}"
@@ -72,32 +247,32 @@ The user said: "{state['current_input']}"
 Classify ALL intents present in this message. A single message can have MULTIPLE intents.
 Available intent categories:
 - "greeting" — Hello, hi, good morning, thank you, bye, small talk, etc.
-- "policy_query" — Questions about company rules, policies, leave policy, working hours, code of conduct, etc.
-- "data_query" — Asking about own employment data: leave balance, salary, personal details (name, blood group, address, manager, joining date), holidays, team size, etc.
-- "data_update" — HR/Admin explicitly wants to UPDATE someone's data (change designation, update salary, modify details).
-- "leave_request" — Applying for leave, requesting time off (e.g. "I want leave on Monday", "apply 3 days sick leave").
-- "resignation" — Submitting resignation, quitting.
-- "grievance" — Filing a complaint or grievance.
-- "approval_action" — Manager/HR approving or rejecting a request.
-- "status_check" — Checking status of a previously submitted request.
-- "support" — Password reset, login issues, account problems.
-- "general" — Anything else: company info questions, conversational chat, "what can you do", "who is HR", clarifications, broad questions about the workplace, etc.
+- "policy_query" — Questions about process rules, workbook definitions, or how the FMS works.
+- "data_query" — Questions about clients, loan files, Client Job Code, Mobile Number, bank/branch, loan amount, project name, status, steps, doers, team leader, reports, queries, sanction letter, disbursement, dashboards, completed/dropped/post-sanction files, or summaries.
+- "data_update" — Admin explicitly wants to update sheet/database data.
+- "leave_request" — Not normally used for Finance FMS.
+- "resignation" — Not normally used for Finance FMS.
+- "grievance" — Not normally used for Finance FMS.
+- "approval_action" — Approval/rejection action.
+- "status_check" — Checking status of a client loan file, query, report, sanction, task, or step.
+- "support" — Login/access/account problems.
+- "general" — Anything else: conversational chat, what can you do, broad clarification, etc.
 
 Important:
-- If the user is just asking a question that doesn't clearly fit data/policy/request, prefer "general" — the general handler is smart and can answer conversationally.
-- "What is my company name" → "data_query" (it's about their employment context)
-- "Who is the CEO" / "Tell me about the company" → "general"
+- Finance FMS workbook context summary:
+{workbook_context[:2500]}
+- If the user asks about workbook data or a sheet described above, classify as "data_query".
+- If the user asks what a sheet/column/step means, classify as "policy_query" or "general".
 - "What can you help me with" → "general"
-- If the user's Role is admin and they ask about employees, departments, listings, or summaries, classify as "data_query".
+- If the user's Role is admin and they ask about lists, totals, dashboards, reports, or summaries, classify as "data_query".
 
 If the message contains multiple intents, return them comma-separated.
 Examples:
-- "hi, show me my leave balance" → "greeting,data_query"
-- "tell me my details and company policy" → "data_query,policy_query"
-- "I want to apply for leave" → "leave_request"
+- "hi, show my loan file" → "greeting,data_query"
+- "tell me my details and current status" → "data_query"
+- "what does DB_Format do" → "policy_query"
 - "thanks!" → "greeting"
-- "what is botivate" → "general"
-- "list all employees" (admin) → "data_query"
+- "list all post sanction files" (admin) → "data_query"
 
 Return ONLY the intent string(s), nothing else.
 """
@@ -163,10 +338,10 @@ async def handle_greeting(state: AgentState) -> AgentState:
     print(f"[{state['company_id']}][AGENT GREETING] Triggering greeting for {name}.")
 
     state["response"] = (
-        f"Hello {name}! 👋 Welcome to your HR Support Portal. "
+        f"Hello {name}! 👋 Welcome to the Finance FMS assistant. "
         f"You are logged in as **{role.title()}**. "
-        f"How can I help you today? You can ask about company policies, check your leave balance, "
-        f"submit requests, or anything else related to HR."
+        f"You can ask about client loan files, bank status, queries, reports, sanction letters, "
+        f"doers, dashboards, and workflow steps."
     )
     state["actions"] = []
     return state
@@ -175,100 +350,32 @@ async def handle_greeting(state: AgentState) -> AgentState:
 # ── Node 3: Policy Query (RAG) ───────────────────────────
 
 async def handle_policy_query(state: AgentState) -> AgentState:
-    """Answer policy questions using RAG or direct DB fallback. Handles both text and document policies."""
-    from app.config import settings as app_settings
-    print(f"[{state['company_id']}][AGENT POLICY] Handling policy query: '{state['current_input']}'")
-    
-    answer = None
-    used_rag = False
-    
-    # Step 1: Try RAG if OpenAI key is available
-    if app_settings.openai_api_key and app_settings.openai_api_key != "your-openai-api-key-here":
-        try:
-            print(f"[{state['company_id']}][AGENT POLICY] Querying RAG system...")
-            answer = await answer_from_policies(state["company_id"], state["current_input"])
-            # Check if RAG actually found something meaningful
-            if answer and "could not find" not in answer.lower() and "no relevant" not in answer.lower():
-                used_rag = True
-                print(f"[{state['company_id']}][AGENT POLICY] RAG found a matching policy.")
-        except Exception as e:
-            print(f"[{state['company_id']}][POLICY RAG ERROR] {e}")
-    
-    # Step 2: If RAG didn't work, fetch policies directly from internal DB
-    if not used_rag:
-        print(f"[{state['company_id']}][AGENT POLICY] RAG did not answer. Falling back to direct DB fetch...")
-        try:
-            from app.database import async_session_factory
-            from app.services.company_service import get_policies
-            async with async_session_factory() as db_session:
-                policies = await get_policies(db_session, state["company_id"])
-                if policies:
-                    policy_texts = []
-                    for p in policies:
-                        content = p.content or p.description or ""
-                        
-                        # For document-type policies, try reading file content
-                        if p.policy_type and p.policy_type.value == "document" and p.file_path:
-                            try:
-                                if p.file_path.lower().endswith(".pdf"):
-                                    from pypdf import PdfReader
-                                    reader = PdfReader(p.file_path)
-                                    pdf_text = ""
-                                    for page in reader.pages:
-                                        extracted = page.extract_text()
-                                        if extracted:
-                                            pdf_text += extracted + "\n"
-                                    content = pdf_text.strip() if pdf_text.strip() else content
-                                elif p.file_path.lower().endswith((".txt", ".md")):
-                                    with open(p.file_path, "r", encoding="utf-8") as f:
-                                        content = f.read()
-                            except Exception as fe:
-                                print(f"[{state['company_id']}][POLICY FILE READ ERROR] {fe}")
-                                content = content or f"(Document: {p.file_name or p.file_path})"
-                        
-                        if content:
-                            policy_texts.append(f"**📄 {p.title}**\n{content[:2000]}")
-                        else:
-                            policy_texts.append(f"**📄 {p.title}**\n{p.description or 'Policy document available. Contact HR for details.'}")
-                    
-                    # If we have AI, use it to format a nice answer from the policy data
-                    if app_settings.openai_api_key and app_settings.openai_api_key != "your-openai-api-key-here":
-                        try:
-                            print(f"[{state['company_id']}][AGENT POLICY] Formatting DB fallback with LLM...")
-                            llm = get_llm()
-                            full_context = "\n\n---\n\n".join(policy_texts)
-                            fmt_prompt = f"""You are an HR assistant. Answer the employee's question using ONLY the company policies provided below.
+    """Answer Finance FMS process/sheet/column definition questions from description.txt."""
+    print(f"[{state['company_id']}][AGENT POLICY] Handling workbook definition query: '{state['current_input']}'")
+    workbook_context = state.get("workbook_context") or ""
+    if not workbook_context:
+        state["response"] = "I don't have the Finance FMS workbook description loaded right now."
+        state["actions"] = []
+        return state
 
-Company Policies:
-{full_context}
+    llm = get_llm()
+    prompt = f"""You are a Finance FMS workbook expert. Answer using ONLY this workbook description.
 
-Employee Question: {state['current_input']}
+Workbook description:
+{workbook_context}
 
-Answer precisely from the policies. If the specific answer isn't in the policies, summarize what policies are available.
+Question: {state['current_input']}
 
-FORMATTING RULES:
-- Use clear SECTION HEADERS (###).
-- Use BULLETED LISTS for readability.
-- DO NOT just dump a single paragraph.
-- Use DOUBLE NEWLINES between sections.
+Rules:
+- Explain sheet purpose, columns, and connections precisely.
+- If the description does not contain the answer, say so.
+- Keep the answer concise and practical.
 """
-                            resp = await llm.ainvoke([HumanMessage(content=fmt_prompt)])
-                            answer = resp.content.strip()
-                        except Exception as le:
-                            print(f"[POLICY LLM FORMAT ERROR] {le}")
-                            answer = "Here are your company's policies:\n\n" + "\n\n---\n\n".join(policy_texts)
-                    else:
-                        answer = "Here are your company's policies:\n\n" + "\n\n---\n\n".join(policy_texts)
-                else:
-                    answer = "No policies have been added for your company yet. Please contact your HR department."
-        except Exception as e:
-            print(f"[{state['company_id']}][POLICY DB FALLBACK ERROR] {e}")
-            answer = "I could not retrieve policies at this time. Please try again later."
-    
-    state["response"] = answer or "I could not find any policy information. Please contact your HR department."
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    state["response"] = response.content.strip()
     state["policy_answer"] = state["response"]
     state["actions"] = []
-    print(f"[{state['company_id']}][AGENT POLICY] Policy query handled successfully.")
+    print(f"[{state['company_id']}][AGENT POLICY] Workbook definition query handled successfully.")
     return state
 
 
@@ -298,6 +405,7 @@ async def handle_data_query(state: AgentState) -> AgentState:
         primary_key = validated_schema.primary_key
         employee_id = state["employee_id"]
         role = state["role"]
+        question_text = state["current_input"]
 
         raw_employee_data = state.get("employee_data", {})
         admin_records = raw_employee_data if isinstance(raw_employee_data, list) else None
@@ -341,61 +449,83 @@ async def handle_data_query(state: AgentState) -> AgentState:
                     state["actions"] = []
                     return state
 
-        # Fetch child table records related to this employee or static small tables
+        # Fetch relevant Finance FMS worksheets for this question.
         child_tables_data = {}
-        if validated_schema.child_tables:
-            print(f"[{state['company_id']}][AGENT DATA QUERY] Extracting data from child tables...")
+        relevant_tables = get_relevant_table_names(state["current_input"], state["schema_map"], role)
+        if relevant_tables:
+            print(f"[{state['company_id']}][AGENT DATA QUERY] Extracting relevant Finance FMS tables: {relevant_tables}")
             db_type = DatabaseType(state.get("db_type", "google_sheets"))
             adapter = await get_adapter(db_type, state["db_config"])
-            for child_table_name in validated_schema.child_tables.keys():
+            identifiers = [employee_id]
+            if own_record:
+                identifiers.extend([
+                    str(own_record.get("Client Name", "")),
+                    str(own_record.get("Mobile Number", "")),
+                    str(own_record.get("Client Job Code", "")),
+                ])
+            if role == "admin":
+                identifiers.extend(extract_query_identifiers(question_text, admin_records))
+
+            for child_table_name in relevant_tables:
                 try:
                     all_child_recs = await adapter.get_all_records(table_name=child_table_name)
-                    # Filter for records belonging to this employee
-                    employee_child_recs = []
-                    for r in all_child_recs:
-                        # Match if employee_id is in any of the column values
-                        if employee_id.lower() in [str(v).strip().lower() for v in r.values()]:
-                            employee_child_recs.append(r)
-                            
-                    # If the table has NO records for the employee but has less than 100 rows, 
-                    # it might be a shared/global table (like Holidays). Check table name / row count.
-                    if not employee_child_recs and len(all_child_recs) < 50:
-                        employee_child_recs = all_child_recs  # Include whole table
-                        print(f"[{state['company_id']}][AGENT DATA QUERY] Included '{child_table_name}' entirely as a shared/global small table.")
+                    if role == "admin":
+                        selected_records = filter_related_records(all_child_recs, identifiers, limit=12)
+                        if not selected_records:
+                            selected_records = all_child_recs[:8]
+                    else:
+                        selected_records = filter_related_records(all_child_recs, identifiers, limit=10)
 
-                    if employee_child_recs:
-                        child_tables_data[child_table_name] = employee_child_recs
-                        print(f"[{state['company_id']}][AGENT DATA QUERY] Included '{child_table_name}' with {len(employee_child_recs)} records.")
+                    if selected_records:
+                        child_tables_data[child_table_name] = {
+                            "total_rows": len(all_child_recs),
+                            "included_rows": [compact_record(record) for record in selected_records],
+                        }
+                        print(f"[{state['company_id']}][AGENT DATA QUERY] Included '{child_table_name}' with {len(selected_records)} rows.")
                 except Exception as ce:
                     print(f"[{state['company_id']}][AGENT DATA QUERY] Failed to fetch child table '{child_table_name}': {ce}")
 
         # Step 3: Build data context based on role
-        data_context = json.dumps(own_record, indent=2, default=str) if own_record else "No data found."
+        data_context = json.dumps(compact_record(own_record), indent=2, default=str) if own_record else "No data found."
         if role == "admin" and admin_records is not None and not own_record:
-            data_context = json.dumps(
-                {"total_records": len(admin_records), "sample_records": admin_records[:10]},
-                indent=2,
-                default=str,
-            )
+            query_identifiers = extract_query_identifiers(question_text, admin_records)
+            narrowed_records = filter_related_records(admin_records, query_identifiers, limit=12) if query_identifiers else []
+            if narrowed_records:
+                data_context = json.dumps(
+                    {
+                        "raw_data_total_records": len(admin_records),
+                        "matched_raw_data_records": [compact_record(record) for record in narrowed_records],
+                    },
+                    indent=2,
+                    default=str,
+                )
+            else:
+                data_context = json.dumps(
+                    {
+                        "raw_data_total_records": len(admin_records),
+                        "raw_data_sample_records": [compact_record(record) for record in admin_records[:8]],
+                    },
+                    indent=2,
+                    default=str,
+                )
         if child_tables_data:
-            data_context += f"\n\nRelated Records (from other tabs):\n{json.dumps(child_tables_data, indent=2, default=str)}"
+            data_context += f"\n\nRelated Finance FMS worksheet records:\n{json.dumps(child_tables_data, indent=2, default=str)}"
         
         # For admin/manager roles asking about other employees, fetch team data too
         extra_context = ""
         # Adding some generic keywords here to trigger team context
-        team_keywords = ["team", "all employee", "everyone", "department", "report", "staff", "headcount", "dashboard", "total employee", "kitne employee"]
-        user_question = state["current_input"].lower()
+        team_keywords = ["team", "all", "everyone", "report", "staff", "headcount", "dashboard", "total", "portfolio", "summary"]
+        user_question = question_text.lower()
         if role in ("hr", "admin", "manager") or any(kw in user_question for kw in team_keywords):
             if any(kw in user_question for kw in team_keywords):
-                print(f"[{state['company_id']}][AGENT DATA QUERY] Team/Dashboard keywords detected. Pulling team data context.")
+                print(f"[{state['company_id']}][AGENT DATA QUERY] Summary/dashboard keywords detected. Pulling RAW DATA context.")
                 if admin_records is None:
                     db_type = DatabaseType(state.get("db_type", "google_sheets"))
                     adapter = await get_adapter(db_type, state["db_config"])
                     master_table = validated_schema.master_table
                     admin_records = await adapter.get_all_records(table_name=master_table)
-                extra_context = f"\n\nAdditional team data (you have {role} access. Total employees: {len(admin_records)}):\n{json.dumps(admin_records[:50], indent=2, default=str)}"
-            elif role == "admin" and admin_records is not None:
-                extra_context = f"\n\nAdditional team data (you have admin access. Total employees: {len(admin_records)}):\n{json.dumps(admin_records[:50], indent=2, default=str)}"
+                summary_records = [compact_record(record) for record in admin_records[:15]]
+                extra_context = f"\n\nAdditional RAW DATA context (you have {role} access. Total records: {len(admin_records)}):\n{json.dumps(summary_records, indent=2, default=str)}"
 
         # Step 4: Ask LLM to answer from verified data
         llm = get_llm()
@@ -404,16 +534,21 @@ async def handle_data_query(state: AgentState) -> AgentState:
         # Different prompt for admin vs employee
         if role == "admin":
             data_context_label = "Available Database:"
-            permission_note = "You are an ADMIN user with full access to the entire employee database. You can answer questions about any employee, department, or generate reports."
+            permission_note = "You are an ADMIN user with full access to the Finance FMS workbook records provided in context."
         else:
-            data_context_label = "Your Employee Record:"
-            permission_note = "You are a regular employee. You can only answer questions about your own data."
+            data_context_label = "Authenticated user's RAW DATA record and related Finance FMS rows:"
+            permission_note = "You are a regular authenticated user. Answer only from this user's RAW DATA record and related rows that match their Client Job Code, client name, or mobile number."
 
-        answer_prompt = f"""You are an HR assistant at {state.get('company_name', 'the company')}. Answer the question using ONLY the data below.
+        workbook_context = state.get("workbook_context") or ""
+
+        answer_prompt = f"""You are a Finance FMS assistant for {state.get('company_name', 'the company')}. Answer the question using ONLY the workbook description and sheet data below.
 
 Access Level: {permission_note}
 Logged-in User: {state['employee_name']} (ID: {state['employee_id']})
 Company Name: {state.get('company_name', 'Not specified')}
+
+Finance FMS Workbook Description:
+{workbook_context}
 
 {data_context_label}
 {data_context}
@@ -423,10 +558,13 @@ Question: {state['current_input']}
 
 Rules:
 - Answer ONLY from the data provided.
+- Use the workbook description to understand sheet names, columns, joins, and meanings.
+- For authenticated non-admin users, do not expose unrelated client records.
 - If the data does not contain the answer, say "I don't have this information in the database."
 - Be professional and concise.
 - For numeric questions, provide calculations and summaries.
 - For listing questions, show results in bullet format.
+- Mention which sheet(s) your answer came from when useful.
 """
         response = await llm.ainvoke([HumanMessage(content=answer_prompt)])
         state["response"] = response.content.strip()
@@ -686,32 +824,36 @@ async def handle_general(state: AgentState) -> AgentState:
     except Exception as e:
         print(f"[{state['company_id']}][AGENT GENERAL] RAG snippet fetch skipped: {e}")
 
-    prompt = f"""You are a helpful HR Support assistant for {state['employee_name']} (Role: {state['role']}) working at **{company_name}**.
+    workbook_context = state.get("workbook_context") or ""
 
-Your job is to be genuinely helpful — answer the employee's question naturally and conversationally.
+    prompt = f"""You are a helpful Finance FMS assistant for {state['employee_name']} (Role: {state['role']}) working with **{company_name}**.
+
+Your job is to help users understand and query the Finance FMS workbook naturally and accurately.
 
 ## What you know:
-- **Company:** {company_name}
-- **Employee profile (full record from HR database):**
+- **Workbook/System:** {company_name}
+- **Finance FMS workbook description:**
+{workbook_context}
+- **Current user/context rows:**
 {emp_data}
 {policy_snippet}
 
 ## How to answer:
 
-1. **If the question is about the employee themselves** (their name, role, salary, leave, joining date, manager, department, blood group, address, etc.) → answer directly from the employee profile above.
+1. **If the question is about the authenticated user's/client's loan file** → answer from the current user/context rows.
 
-2. **If the question is about the company** (company name, policies, working hours, holidays, rules, etc.) → answer from the company info and policy context above.
+2. **If the question is about sheets, columns, workflow steps, or how the system connects** → answer from the workbook description.
 
 3. **If the question is conversational or general** (greetings, "thank you", small talk, "how are you", "what can you do", etc.) → respond naturally and warmly. You don't need data for these.
 
-4. **If the question is HR-related but you don't have the specific data** → say what info you DO have, suggest related things you can help with (policies, leave balance, request status), and offer to escalate to HR/manager if needed.
+4. **If the question asks for live sheet values that are not in the provided context** → say the specific sheet/data is not available in the provided context.
 
-5. **If the question is completely unrelated to work** (e.g. "what's the weather", "tell me a joke", "write code") → politely steer back: "I'm focused on helping you with HR matters at {company_name} — things like policies, leave, requests, or your employment details. Is there anything HR-related I can help with?"
+5. **If the question is completely unrelated to Finance FMS** → politely steer back to loan files, client status, banks, queries, reports, sanction letters, steps, doers, and dashboards.
 
 ## Style:
 - Be warm, concise, and professional.
 - Use **bold** for key facts and bullet points for lists.
-- Never invent data that isn't in the profile or policies.
+- Never invent data that isn't in the workbook description or provided sheet rows.
 - If you genuinely don't know, say so — but always offer a helpful next step.
 
 The user just said: "{user_msg}"
@@ -878,6 +1020,7 @@ async def chat_with_agent(
         "schema_map": schema_map or {},
         "db_config": db_config or {},
         "db_type": db_type or "google_sheets",
+        "workbook_context": get_workbook_context(),
         "messages": chat_history,
         "current_input": user_message,
         "intent": "",

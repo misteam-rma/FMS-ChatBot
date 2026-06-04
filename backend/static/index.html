@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Employee Portal</title>
+    <title>Finance FMS Portal</title>
     <style>
         * {
             margin: 0;
@@ -641,15 +641,15 @@
     <!-- Login Page -->
     <div id="loginContainer" class="login-container active">
         <div class="login-card">
-            <h1>Employee Portal</h1>
+            <h1>Finance FMS Portal</h1>
             <div class="login-tabs">
-                <button class="login-tab active" onclick="switchLoginTab('employee')">Employee Login</button>
+                <button class="login-tab active" onclick="switchLoginTab('employee')">Mobile Login</button>
                 <button class="login-tab" onclick="switchLoginTab('admin')">Admin Login</button>
             </div>
 
-            <!-- Employee Login Form -->
+            <!-- Mobile Login Form -->
             <form id="employeeForm" class="login-form active" onsubmit="handleEmployeeLogin(event)">
-                <p>Enter your mobile number to continue</p>
+                <p>Enter the mobile number registered in RAW DATA</p>
                 <div class="form-group">
                     <label for="mobileNumber">Mobile Number</label>
                     <input
@@ -727,7 +727,61 @@
     </div>
 
     <script>
-        const API_URL = '/api';
+        function getApiBaseUrl() {
+            const { protocol, hostname, port, origin } = window.location;
+
+            if (protocol === 'file:') {
+                return 'http://127.0.0.1:8000/api';
+            }
+
+            const isStaticDevServer =
+                hostname === '127.0.0.1' &&
+                port &&
+                port !== '8000';
+
+            const isLocalhostStaticDevServer =
+                hostname === 'localhost' &&
+                port &&
+                port !== '8000';
+
+            if (isStaticDevServer || isLocalhostStaticDevServer) {
+                return `${protocol}//${hostname}:8000/api`;
+            }
+
+            return `${origin}/api`;
+        }
+
+        async function parseApiResponse(response) {
+            const rawText = await response.text();
+
+            if (!rawText) {
+                return null;
+            }
+
+            try {
+                return JSON.parse(rawText);
+            } catch (error) {
+                if (response.ok) {
+                    throw new Error('Server returned an invalid JSON response.');
+                }
+
+                return { detail: rawText.trim() || `Request failed with status ${response.status}` };
+            }
+        }
+
+        function getErrorMessage(response, data, fallbackMessage) {
+            if (data && typeof data === 'object' && data.detail) {
+                return data.detail;
+            }
+
+            if (response.status === 405) {
+                return 'API request reached the wrong server. Start the FastAPI backend and open the app through that server, or use port 8000 for API calls.';
+            }
+
+            return fallbackMessage || `Request failed with status ${response.status}`;
+        }
+
+        const API_URL = getApiBaseUrl();
         let authToken = null;
         let userInfo = null;
 
@@ -771,10 +825,10 @@
                     body: JSON.stringify({ mobile_number: mobileNumber })
                 });
 
-                const data = await response.json();
+                const data = await parseApiResponse(response);
 
                 if (!response.ok) {
-                    throw new Error(data.detail || 'Login failed');
+                    throw new Error(getErrorMessage(response, data, 'Login failed'));
                 }
 
                 authToken = data.access_token;
@@ -812,10 +866,10 @@
                     body: JSON.stringify({ username, password })
                 });
 
-                const data = await response.json();
+                const data = await parseApiResponse(response);
 
                 if (!response.ok) {
-                    throw new Error(data.detail || 'Login failed');
+                    throw new Error(getErrorMessage(response, data, 'Login failed'));
                 }
 
                 authToken = data.access_token;
@@ -843,7 +897,7 @@
 
             // Show different ID based on user type
             if (userInfo.user_type === 'admin') {
-                document.getElementById('userId').textContent = 'ADMIN - Full Access';
+                document.getElementById('userId').textContent = 'ADMIN - Full Workbook Access';
                 document.getElementById('userId').style.color = '#10b981';
             } else {
                 document.getElementById('userId').textContent = userInfo.employee_id;
@@ -900,9 +954,9 @@
         function initChat() {
             messages = [];
             if (userInfo.user_type === 'admin') {
-                addMessage('ai', `👋 Welcome, Admin! You have full access to the employee database. You can ask about any employee, department, performance, leave balance, and generate reports. What would you like to know?`);
+                addMessage('ai', `👋 Welcome, Admin! You have full access to the Finance FMS workbook. You can ask about clients, loan files, banks, queries, reports, sanction letters, doers, dashboards, and portfolio summaries. What would you like to know?`);
             } else {
-                addMessage('ai', `👋 Welcome, ${userInfo.employee_name.split(' ')[0]}! I'm your personal assistant. I can help you with your profile information and details. What would you like to know?`);
+                addMessage('ai', `👋 Welcome, ${userInfo.employee_name.split(' ')[0]}! I can help you with your Finance FMS loan file details, status, bank, reports, queries, and related workflow information. What would you like to know?`);
             }
         }
 
@@ -967,10 +1021,11 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Failed to get response');
+                    const errorData = await parseApiResponse(response);
+                    throw new Error(getErrorMessage(response, errorData, 'Failed to get response'));
                 }
 
-                const data = await response.json();
+                const data = await parseApiResponse(response);
                 messages[typingMsgIndex].text = data.reply;
                 renderMessages();
             } catch (error) {

@@ -35,6 +35,113 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
         self.worksheet = None
         self._headers_cache: Dict[str, List[str]] = {}
 
+    @staticmethod
+    def _cell_value(row: List[str], index: int) -> str:
+        return str(row[index]).strip() if index < len(row) else ""
+
+    @staticmethod
+    def _column_letter(index: int) -> str:
+        return gspread.utils.rowcol_to_a1(1, index + 1).rstrip("1")
+
+    def _detect_header_row_index(self, values: List[List[str]]) -> int:
+        """Find the real header row in FMS-style sheets with title rows above headers."""
+        best_index = 0
+        best_score = -1
+        expected_headers = {
+            "client name": 20,
+            "job code": 16,
+            "client job code": 16,
+            "doer": 12,
+            "planned": 8,
+            "actual": 8,
+            "status": 8,
+            "url": 6,
+            "remark": 6,
+            "timestamp": 5,
+        }
+
+        for index, row in enumerate(values[:20]):
+            normalized_cells = [str(cell).strip().lower() for cell in row]
+            non_empty_count = sum(1 for cell in normalized_cells if cell)
+            score = min(non_empty_count, 12)
+
+            for cell in normalized_cells:
+                score += expected_headers.get(cell, 0)
+
+            if score > best_score:
+                best_score = score
+                best_index = index
+
+        return best_index
+
+    def _build_unique_headers(self, values: List[List[str]], header_index: int) -> List[str]:
+        header_row = values[header_index]
+        headers = []
+        seen: Dict[str, int] = {}
+        repeated_workflow_headers = {
+            "doer",
+            "planned",
+            "actual",
+            "url",
+            "remark",
+            "status",
+            "group",
+        }
+
+        max_width = max(len(row) for row in values) if values else 0
+        for col_index in range(max_width):
+            base_header = self._cell_value(header_row, col_index)
+            if not base_header:
+                base_header = f"Column {self._column_letter(col_index)}"
+
+            context_parts = []
+            for row_index in range(header_index - 1, -1, -1):
+                value = self._cell_value(values[row_index], col_index)
+                if value and value.lower() not in {part.lower() for part in context_parts}:
+                    context_parts.insert(0, value)
+
+            should_prefix = (
+                base_header.lower() in repeated_workflow_headers
+                or base_header in seen
+                or base_header.startswith("Column ")
+            )
+            if should_prefix and context_parts:
+                header = " - ".join(context_parts + [base_header])
+            else:
+                header = base_header
+
+            count = seen.get(header, 0)
+            seen[header] = count + 1
+            if count:
+                header = f"{header} ({count + 1})"
+
+            headers.append(header)
+
+        return headers
+
+    def _records_from_values(self, values: List[List[str]]) -> List[Dict[str, Any]]:
+        if not values:
+            return []
+
+        header_index = self._detect_header_row_index(values)
+        headers = self._build_unique_headers(values, header_index)
+        records = []
+
+        for row in values[header_index + 1:]:
+            if not any(str(cell).strip() for cell in row):
+                continue
+
+            record = {}
+            for col_index, header in enumerate(headers):
+                value = self._cell_value(row, col_index)
+                if value:
+                    record[header] = value
+
+            if record:
+                records.append(record)
+
+        return records
+
     async def connect(self, config: Dict[str, Any], refresh_token: Optional[str] = None) -> None:
         """Connect to Google Sheets using the HR's OAuth refresh token OR service account JSON."""
         import os
@@ -148,7 +255,19 @@ class GoogleSheetsAdapter(BaseDatabaseAdapter):
     async def get_all_records(self, table_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch all records as a list of dicts."""
         ws = self._get_target_worksheet(table_name)
-        return ws.get_all_records()
+        try:
+            return ws.get_all_records()
+        except Exception as exc:
+            error_text = str(exc).lower()
+            duplicate_header_error = "header row" in error_text and "duplicates" in error_text
+            if not duplicate_header_error:
+                raise
+
+            print(
+                f"[GOOGLE SHEETS] ⚠️ Falling back to flexible parser for worksheet "
+                f"'{ws.title}' because headers are not unique."
+            )
+            return self._records_from_values(ws.get_all_values())
 
     async def get_record_by_key(self, key_column: str, key_value: str, table_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Find a single record by its primary key column value."""
