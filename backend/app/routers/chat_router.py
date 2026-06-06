@@ -78,18 +78,42 @@ def format_client_record(record: dict) -> str:
 
 
 def format_client_list(records: list[dict], limit: int = 50) -> str:
-    visible = records[:limit]
-    lines = [f"Total clients in RAW DATA: {len(records)}", ""]
-    for idx, rec in enumerate(visible, start=1):
-        name = rec.get("Client Name") or "Unknown Client"
+    """List DISTINCT clients.
+
+    RAW DATA has one row per loan *file* (client × bank × facility), so the
+    same client appears across several rows. Listing every row and calling each
+    a "client" is misleading and contradicts the agent's "distinct clients"
+    answer. We dedupe by client name and report both counts honestly.
+    """
+    # Group rows by client name (keep first row per client for its code/mobile)
+    clients: dict[str, dict] = {}
+    for rec in records:
+        name = (rec.get("Client Name") or "").strip()
+        if not name:
+            continue
+        key = normalize_text(name)
+        if key not in clients:
+            clients[key] = {"name": name, "files": 0, "first": rec}
+        clients[key]["files"] += 1
+
+    distinct = list(clients.values())
+    total_files = len(records)
+
+    lines = [
+        f"Distinct clients: {len(distinct)}  (across {total_files} loan files in RAW DATA)",
+        "",
+    ]
+    for idx, c in enumerate(distinct[:limit], start=1):
+        rec = c["first"]
         code = rec.get("Client Job Code") or "N/A"
         mobile = rec.get("Mobile Number") or "N/A"
-        project = rec.get("Project Name") or "N/A"
-        lines.append(f"{idx}. {name} | Code: {code} | Mobile: {mobile} | Project: {project}")
+        files = c["files"]
+        files_note = f" | {files} loan files" if files > 1 else ""
+        lines.append(f"{idx}. {c['name']} | Code: {code} | Mobile: {mobile}{files_note}")
 
-    if len(records) > limit:
+    if len(distinct) > limit:
         lines.append("")
-        lines.append(f"Showing first {limit} clients.")
+        lines.append(f"Showing first {limit} of {len(distinct)} distinct clients.")
 
     return "\n".join(lines)
 
