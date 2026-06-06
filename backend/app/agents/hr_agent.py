@@ -449,6 +449,7 @@ Workbook description:
 Question: {state['current_input']}
 
 Rules:
+- LANGUAGE — reply in the SAME language as the Question: plain English → English; Romanized Hindi/English mix → Hinglish; Devanagari Hindi → Hindi. When unsure, default to English. Keep sheet/column names and abbreviations as-is.
 - Explain sheet purpose, columns, and connections precisely.
 - If the description does not contain the answer, say so.
 - Keep the answer concise and practical.
@@ -639,15 +640,19 @@ Finance FMS Workbook Description:
 Question: {state['current_input']}
 
 Rules:
+- LANGUAGE — match the user's language EXACTLY. Detect the language of the Question above and reply in that SAME language. This is mandatory:
+    • If the Question is in plain English (Latin script, English words) → reply in English ONLY. Do NOT add Hindi/Hinglish words.
+    • If the Question is in Hinglish (Romanized Hindi mixed with English, e.g. "kitne clients hai", "iska status kya hai") → reply in Hinglish.
+    • If the Question is in Hindi (Devanagari script, e.g. "कितने क्लाइंट हैं") → reply in Hindi (Devanagari).
+  Sheet names, column names, Client Job Codes, and FMS abbreviations (P-CL, BN, TEV, DDR) stay as-is in every language. When unsure, default to English.
 - Answer ONLY from the data provided.
 - Use the workbook description to understand sheet names, columns, joins, and meanings.
 - For authenticated non-admin users, do not expose unrelated client records.
-- If the data does not contain the answer, say "I don't have this information in the database."
+- If the data does not contain the answer, say "I don't have this information in the database." (translate this into the user's language too).
 - Be professional and concise.
 - For numeric questions, provide calculations and summaries.
 - For listing questions, show results in bullet format.
 - Mention which sheet(s) your answer came from when useful.
-- The user may ask in Hinglish (mixed Hindi-English). Always respond in the same language style as the user. If they ask in Hinglish, reply in Hinglish. If they ask in English, reply in English.
 - When users mention FMS step numbers (e.g., "step 7"), refer to the actual step name and sub-tasks.
 - When users mention abbreviations (P-CL, BN, TEV, DDR, etc.), expand them in your answer.
 """
@@ -936,6 +941,7 @@ Your job is to help users understand and query the Finance FMS workbook naturall
 5. **If the question is completely unrelated to Finance FMS** → politely steer back to loan files, client status, banks, queries, reports, sanction letters, steps, doers, and dashboards.
 
 ## Style:
+- LANGUAGE — reply in the SAME language as the user's message: plain English → English ONLY (no Hindi/Hinglish words); Romanized Hindi/English mix → Hinglish; Devanagari Hindi → Hindi. When unsure, default to English. Keep sheet/column names, Client Job Codes, and abbreviations as-is.
 - Be warm, concise, and professional.
 - Use **bold** for key facts and bullet points for lists.
 - Never invent data that isn't in the workbook description or provided sheet rows.
