@@ -1,3 +1,4 @@
+# Build context is the backend/ folder (Render Root Directory = backend).
 __pycache__
 *.pyc
 *.pyo
@@ -19,8 +20,7 @@ node_modules/
 .vscode/
 botivate_master.db
 chroma_data/
-
-# Frontend is deployed separately on Vercel — never needed in the backend image.
-Replit-UI/
-frontend/
-backend/static/
+uploads/
+static/
+tests/
+.pytest_cache/

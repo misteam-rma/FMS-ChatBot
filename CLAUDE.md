@@ -31,8 +31,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 cd backend
 python reset_db.py
 
-# Docker build + run (uses the ROOT Dockerfile — there is no backend/Dockerfile)
-docker build -f Dockerfile -t finance-fms:latest .
+# Docker build + run (from backend/ — Render uses Root Directory = backend)
+cd backend
+docker build -t finance-fms:latest .
 docker run -p 8000:8000 --env-file .env finance-fms:latest
 
 # Run tests
@@ -285,18 +286,24 @@ Status: **Phase 0 ✅ · Phase 1 ✅ · Phase 2 ✅ · Phase 3 ⏳ (tests + lint
 | `description.txt` | 875 | Repo-root copy — 41-sheet description (subset of description.md). Kept intentionally |
 | `Replit-UI/artifacts/rma-portal/` | — | React SPA source (gitignored). Key files: `src/pages/{LoginPage,ChatPage}.tsx`, `src/lib/{api,markdown,storage}.ts`, `public/{RMA,RMA_Extended,favicon}.png` |
 | `backend/static/` | — | Pre-built Vite output served by FastAPI (`index.html`, `assets/`, logos, favicon) |
-| `Dockerfile` (root) | — | The deploy image (python:3.11-slim). There is NO `backend/Dockerfile` |
+| `backend/Dockerfile` | — | The backend deploy image (python:3.11-slim, API-only). Render builds it with Root Directory = `backend`. `backend/.dockerignore` scopes the context |
 
 ---
 
-## Deployment (Render.com)
+## Deployment (split: Render + Vercel)
 
-Deployed via the **root `Dockerfile`** (python:3.11-slim). The React frontend is
-pre-built and committed to `backend/static/`, so the image is Python-only (no Node).
+The two halves deploy independently from this repo:
 
-- **Image**: root `Dockerfile` — installs `requirements.txt`, copies `backend/app` + `backend/static`, serves with uvicorn on port 8000
-- Set all env vars in the Render dashboard (not via file). In prod: `SKIP_GOOGLE_AUTH=false`, `APP_ENV` ≠ `development`, real `JWT_SECRET_KEY`/`OPENAI_API_KEY`/`GOOGLE_SERVICE_ACCOUNT_JSON`
-- **Before deploying a UI change**: rebuild the React app and commit `backend/static/` (see the Frontend build note under Commands)
-- Live instance: `finance-chatbot-9ni2.onrender.com`
+- **Backend → Render (Docker)**: build from `backend/Dockerfile` with the Render
+  service **Root Directory = `backend`** (python:3.11-slim, API-only — does not
+  serve the SPA). Set env vars in the Render dashboard (`backend/.env.example`):
+  in prod `APP_ENV` ≠ `development`, `SKIP_GOOGLE_AUTH=false`, real
+  `JWT_SECRET_KEY`/`OPENAI_API_KEY`/`GOOGLE_SERVICE_ACCOUNT_JSON`, and
+  `ALLOWED_ORIGINS` = the Vercel URL.
+- **Frontend → Vercel**: project **Root Directory = `frontend`** (Vite, auto-detected
+  via `frontend/vercel.json`). Set `VITE_API_BASE_URL` = the Render URL **+ `/api`**.
+- **CORS**: the backend disables credentialed CORS when `ALLOWED_ORIGINS=*`, so it
+  must list the explicit Vercel origin.
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full instructions and [docs/COMMANDS.txt](docs/COMMANDS.txt) for a quick command reference.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full step-by-step instructions and
+[docs/COMMANDS.txt](docs/COMMANDS.txt) for a quick command reference.

@@ -11,8 +11,9 @@ FRONTEND (from frontend/)
   npm run dev            # local dev server (port 5173)
   npm run build          # production build -> dist/
 
-DOCKER (backend, from repo root — used by Render)
-  docker build -f Dockerfile -t finance-fms:latest .
+DOCKER (backend, from backend/ — used by Render with Root Directory = backend)
+  cd backend
+  docker build -t finance-fms:latest .
   docker run -p 8000:8000 --env-file .env finance-fms:latest
 
 GENERATE A JWT SECRET

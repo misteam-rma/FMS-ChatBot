@@ -27,7 +27,7 @@ Vercel (React SPA)  ──HTTPS /api/*──▶  Render (FastAPI)  ──▶  Go
 
 ## 1. Backend → Render (Docker)
 
-Render builds from the **root `Dockerfile`** (python:3.11-slim, API-only — it no
+Render builds from **`backend/Dockerfile`** (python:3.11-slim, API-only — it no
 longer serves the SPA).
 
 **Service settings**
@@ -37,8 +37,8 @@ longer serves the SPA).
 | Type | Web Service |
 | Runtime | **Docker** |
 | Branch | `main` (or your deploy branch) |
-| Root Directory | **(blank / repo root)** — *not* `backend/`; the Dockerfile uses `backend/...` paths |
-| Dockerfile Path | `Dockerfile` |
+| **Root Directory** | **`backend`** — the build context is the backend folder |
+| Dockerfile Path | `Dockerfile` (i.e. `backend/Dockerfile`) |
 
 **Environment variables** (see `backend/.env.example`)
 
