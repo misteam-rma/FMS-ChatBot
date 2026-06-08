@@ -20,7 +20,7 @@ node_modules/
 botivate_master.db
 chroma_data/
 
-# React UI workspace — source only; the built output is committed to
-# backend/static/ and served from there. Not needed in the image.
+# Frontend is deployed separately on Vercel — never needed in the backend image.
 Replit-UI/
-backend/static/*.bak
+frontend/
+backend/static/

@@ -7,12 +7,17 @@ ENV/
 env.bak/
 venv.bak/
 
-# React UI workspace — nested git repo; source kept separately, built
-# output committed to backend/static/. Do not commit as a gitlink.
+# Old Replit UI workspace (nested git repo). Superseded by frontend/ which is
+# a tracked, standalone Vite app deployed on Vercel. Keep ignored / can delete.
 Replit-UI/
 
-# UI backups / scratch
-backend/static/*.bak
+# Frontend (Vite app, deployed on Vercel) — track source, ignore build output.
+frontend/node_modules/
+frontend/dist/
+frontend/.tsbuildinfo
+
+# Backend no longer serves the SPA; static dir is obsolete.
+backend/static/
 
 # Credentials & Secrets
 *.json
@@ -103,6 +108,5 @@ render.yaml
 backend/runtime.txt
 
 # Old folders
-frontend/
 ai_prompts/
 docs/

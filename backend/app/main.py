@@ -8,7 +8,6 @@ import os
 import time
 import logging
 from fastapi import FastAPI, Request, Depends
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -155,8 +154,6 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 
 # ── Health Check ──────────────────────────────────────────
-# NOTE: must be registered BEFORE the catch-all static mount on "/",
-# otherwise StaticFiles swallows /api/health and returns 404.
 
 @app.get("/api/health")
 async def health(db: AsyncSession = Depends(get_db)):
@@ -204,31 +201,13 @@ async def health(db: AsyncSession = Depends(get_db)):
     return health_status
 
 
-# ── Serve the React SPA (built by Vite) ────────────────────
-# The frontend is a client-side single-page app (wouter routes: "/", "/chat").
-# Hashed build assets live under /assets and are served directly; every other
-# non-API path falls back to index.html so deep links / refreshes on "/chat"
-# don't 404. Mounted LAST so /api/* routes always take precedence.
-static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
-if os.path.exists(static_dir):
-    from fastapi.responses import FileResponse
+# ── API-only backend ──────────────────────────────────────
+# The frontend is deployed separately on Vercel (see frontend/) and reaches
+# this service via VITE_API_BASE_URL. This backend serves the API only and no
+# longer hosts the React SPA. Set ALLOWED_ORIGINS to the Vercel domain(s) so
+# the browser can make credentialed cross-origin requests.
 
-    assets_dir = os.path.join(static_dir, "assets")
-    if os.path.isdir(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    index_path = os.path.join(static_dir, "index.html")
-
-    @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
-        """Serve a real static file if it exists, else fall back to index.html."""
-        # Never hijack API routes (already registered above, but be defensive).
-        if full_path.startswith("api/"):
-            from fastapi import HTTPException
-            raise HTTPException(status_code=404, detail="Not found")
-
-        candidate = os.path.join(static_dir, full_path)
-        if full_path and os.path.isfile(candidate):
-            return FileResponse(candidate)
-
-        return FileResponse(index_path)
+@app.get("/")
+async def root():
+    return {"service": settings.app_name, "status": "ok", "docs": "/docs"}

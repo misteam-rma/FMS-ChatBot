@@ -16,10 +16,9 @@ RUN pip install uv && uv pip install --system -r requirements.txt
 # Copy backend code (app includes utils/, context/, etc.)
 COPY backend/app ./app
 
-# Copy the pre-built React SPA. The frontend lives in Replit-UI/ as source;
-# it is built locally with `vite build` and the output is committed to
-# backend/static/. This image just serves those static files — no Node needed.
-COPY backend/static ./static
+# API-only backend. The frontend is deployed separately on Vercel (see
+# frontend/) and reaches this service via VITE_API_BASE_URL — no static files
+# are served here.
 
 # Runtime dirs the app expects
 RUN mkdir -p chroma_data uploads

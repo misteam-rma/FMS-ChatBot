@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.tsbuildinfo
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# These JSON config files are caught by the root *.json (credentials) rule —
+# explicitly track them.
+!package.json
+!package-lock.json
+!tsconfig.json
+!components.json
+!vercel.json
