@@ -4,20 +4,33 @@ BACKEND (from backend/)
   cp .env.example .env
   pip install -r requirements.txt
   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-  pytest tests/ -v
+  pytest tests/ -v --tb=short
 
 FRONTEND (from frontend/)
+  cp .env.example .env.local
   npm install
-  npm run dev            # local dev server (port 5173)
-  npm run build          # production build -> dist/
+  npm run dev
+  npm run build
 
-DOCKER (backend, from backend/ — used by Render with Root Directory = backend)
-  cd backend
-  docker build -t finance-fms:latest .
-  docker run -p 8000:8000 --env-file .env finance-fms:latest
+DOCKER (backend, from backend/ — Render Root Directory = backend)
+  docker build -t rma-fms-v2:latest .
+  docker run -p 8000:8000 --env-file .env rma-fms-v2:latest
 
 GENERATE A JWT SECRET
   python -c "import secrets; print(secrets.token_hex(32))"
 
+LOCAL HEALTH CHECK
+  curl http://localhost:8000/api/health
+
+ACTIVE API
+  POST /api/auth/verify-client-code
+  POST /api/auth/verify-admin
+  POST /api/chat/send
+  GET  /api/health
+
 DEPLOY
-  Push to the deploy branch -> Render (backend) and Vercel (frontend) auto-build.
+  Backend: Render Docker service with Root Directory = backend.
+  Frontend: Vercel Vite project with Root Directory = frontend.
+  Set frontend VITE_API_BASE_URL to the Render URL + /api.
+  Set backend ALLOWED_ORIGINS to the exact Vercel origin.
+

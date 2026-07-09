@@ -1,145 +1,206 @@
-# Deployment Guide — RMA Finance FMS Portal
+# Deployment Guide — RMA FMS v2 Chatbot
 
-The app is a **split deployment**:
+The app is a split deployment:
 
-- **Frontend** (`frontend/`) — React 19 + Vite SPA → **Vercel**
-- **Backend** (`backend/`) — FastAPI + LangGraph agent → **Render** (Docker)
+- **Frontend** (`frontend/`) — React 19 + Vite SPA on **Vercel**
+- **Backend** (`backend/`) — FastAPI API on **Render** using Docker
 
-They run on different origins and talk over HTTPS: the frontend calls the
-backend via `VITE_API_BASE_URL`, and the backend allows that origin via
-`ALLOWED_ORIGINS` (CORS).
+The backend is API-only. It does not serve the SPA and it does not require SQLite
+for normal startup, auth, chat, or health checks.
 
+```text
+Vercel React SPA -> Render FastAPI API -> Google Sheets FMS1-FMS4 -> LLM fallback
 ```
-Vercel (React SPA)  ──HTTPS /api/*──▶  Render (FastAPI)  ──▶  Google Sheets + OpenAI + SQLite
-```
+
+The frontend calls the backend through `VITE_API_BASE_URL`; the backend allows
+that origin through `ALLOWED_ORIGINS`.
 
 ---
 
 ## Prerequisites
 
-- GitHub repo connected to both Vercel and Render
-- **OpenAI API key**
-- **Google service-account JSON** (Google Cloud → Service Accounts) with access to the workbook
-- **Google Sheet ID** — the `{ID}` in `https://docs.google.com/spreadsheets/d/{ID}/edit`
-- A `JWT_SECRET_KEY` — generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
+- GitHub repo connected to Render and Vercel
+- Google service-account JSON with access to workbook `ChatBot-FMS-RMA`
+- Google Sheet ID: `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8`
+- At least one configured LLM provider key:
+  - Cerebras, Groq, NVIDIA, or OpenAI
+- `JWT_SECRET_KEY`: generate with:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
 
 ---
 
-## 1. Backend → Render (Docker)
+## 1. Backend -> Render
 
-Render builds from **`backend/Dockerfile`** (python:3.11-slim, API-only — it no
-longer serves the SPA).
-
-**Service settings**
+Render service settings:
 
 | Setting | Value |
-|---------|-------|
+|---|---|
 | Type | Web Service |
-| Runtime | **Docker** |
-| Branch | `main` (or your deploy branch) |
-| **Root Directory** | **`backend`** — the build context is the backend folder |
-| Dockerfile Path | `Dockerfile` (i.e. `backend/Dockerfile`) |
+| Runtime | Docker |
+| Branch | `main` or your deploy branch |
+| Root Directory | `backend` |
+| Dockerfile Path | `Dockerfile` |
 
-**Environment variables** (see `backend/.env.example`)
+Backend env vars, from `backend/.env.example`:
 
 | Key | Value |
-|-----|-------|
-| `OPENAI_API_KEY` | your key |
-| `OPENAI_MODEL` | `gpt-4o-mini` |
+|---|---|
+| `APP_ENV` | `production` |
+| `ALLOWED_ORIGINS` | Vercel origin, set after frontend deploy |
 | `JWT_SECRET_KEY` | 32+ random chars |
 | `APP_SECRET_KEY` | strong random string |
-| `APP_ENV` | `production` |
-| `GOOGLE_SHEET_ID` | `1E6HKeoYxOrroF-ogNpmyks-nuYX4f-iUjFMG7Fu2X_4` |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | full JSON, single line |
-| `GOOGLE_EMPLOYEE_SHEET_NAME` | `RAW DATA` |
-| `SKIP_GOOGLE_AUTH` | `false` |
-| `ALLOWED_ORIGINS` | set in step 3 (the Vercel URL) |
-| `FAST_LLM_API_KEY` / `FAST_LLM_MODEL` / `FAST_LLM_BASE_URL` | optional (Groq/Cerebras) |
+| `GOOGLE_SHEET_ID` | `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8` |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | full service-account JSON, single line |
+| `CEREBRAS_API_KEY` | optional, first provider |
+| `CEREBRAS_MODEL` | `gpt-oss-120b` |
+| `GROQ_API_KEY` | optional, second provider |
+| `GROQ_MODEL` | `gpt-oss-120b` |
+| `NVIDIA_API_KEY` | optional, third provider |
+| `NVIDIA_MODEL` | required only if using NVIDIA |
+| `OPENAI_API_KEY` | optional but recommended final fallback |
+| `OPENAI_MODEL` | `gpt-4o-mini` |
 
-Deploy, then note the URL (e.g. `https://finance-chatbot-9ni2.onrender.com`).
-Verify: `https://<backend>/api/health` returns JSON with a `status` field.
+Provider fallback order is:
 
-> **Free-tier note:** Render free instances sleep when idle; the first request
-> after a cold start takes ~30–60s. Login will appear to hang once, then work.
+```text
+Cerebras -> Groq -> NVIDIA -> OpenAI
+```
+
+Providers without both API key and model are skipped.
+
+Deploy the backend and note the Render URL, for example:
+
+```text
+https://rma-fms-v2.onrender.com
+```
+
+Verify:
+
+```text
+https://<backend>/api/health
+```
+
+Expected health payload includes:
+
+- `status`
+- `service`
+- `database: "not_used"`
+- `google_sheets`
+- `llm_providers`
+
+Render free-tier note: cold starts can take 30-60 seconds after idle periods.
 
 ---
 
-## 2. Frontend → Vercel
+## 2. Frontend -> Vercel
 
-**Project settings** (New Project → import the repo)
+Vercel project settings:
 
 | Setting | Value |
-|---------|-------|
-| Root Directory | **`frontend`** ← the key setting |
-| Framework Preset | Vite (auto-detected via `frontend/vercel.json`) |
-| Build Command | `npm run build` (auto) |
-| Output Directory | `dist` (auto) |
-| Install Command | `npm install` (auto) |
+|---|---|
+| Root Directory | `frontend` |
+| Framework Preset | Vite |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+| Install Command | `npm install` |
 
-**Environment variable** (see `frontend/.env.example`)
+Frontend env var, from `frontend/.env.example`:
 
 | Key | Value |
-|-----|-------|
-| `VITE_API_BASE_URL` | `https://<backend>.onrender.com/api` ← backend URL **+ `/api`** |
+|---|---|
+| `VITE_API_BASE_URL` | `https://<backend>.onrender.com/api` |
 
-Deploy, then note the Vercel URL (e.g. `https://rma-frontend.vercel.app`).
+The `/api` suffix is required.
 
-> The `/api` suffix is required. Set the var for **Production** (and Preview if
-> you want PR previews to reach the backend).
+Deploy and note the Vercel URL, for example:
 
----
-
-## 3. Close the CORS loop (do last)
-
-Back on **Render**, set `ALLOWED_ORIGINS` to the Vercel domain and redeploy:
-
-```
-ALLOWED_ORIGINS=https://rma-frontend.vercel.app
+```text
+https://rma-fms-v2.vercel.app
 ```
 
-This is mandatory: the backend **disables credentialed CORS when
-`ALLOWED_ORIGINS=*`** (browsers forbid `*` + credentials), so it must be the
-explicit Vercel origin. Comma-separate multiple origins.
+---
+
+## 3. Close CORS
+
+Back in Render, set:
+
+```text
+ALLOWED_ORIGINS=https://rma-fms-v2.vercel.app
+```
+
+Use the exact Vercel origin. Comma-separate multiple origins if needed.
+
+Do not use `ALLOWED_ORIGINS=*` in production. The backend disables credentialed
+CORS for wildcard origins and logs a warning outside development.
 
 ---
 
-## 4. Verify end-to-end
+## 4. Verify End-to-End
 
-1. Open the Vercel URL — login page loads (RMA logo, favicon, title "RMA | Login").
-2. Log in with a registered mobile number — routes to `/chat`.
-3. DevTools → Network: `verify-mobile` / `chat/send` hit the Render `/api/...`
-   with **200** and no CORS error.
+1. Open the Vercel URL.
+2. Client login:
+   - Enter a valid `Client Job Code`.
+   - Frontend should call `POST /api/auth/verify-client-code`.
+   - Successful login routes to `/chat`.
+3. Admin login:
+   - Username: `admin`
+   - Password: `admin123`
+   - Frontend should call `POST /api/auth/verify-admin`.
+4. Chat:
+   - Frontend calls `POST /api/chat/send`.
+   - Client answers must be scoped to the authenticated Client Job Code.
+   - Factual answers should cite sheet, row, and column.
 
 ---
 
-## Local development
+## Local Development
 
-Run the two halves in separate terminals.
+Backend:
 
-**Backend** (port 8000):
 ```bash
 cd backend
-cp .env.example .env          # fill in real values
+cp .env.example .env
 pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Frontend** (port 5173):
+Frontend:
+
 ```bash
 cd frontend
+cp .env.example .env.local
 npm install
 npm run dev
 ```
 
-With `VITE_API_BASE_URL` unset, the dev server auto-targets the backend on
-`http://localhost:8000/api`. Run the backend tests with `cd backend && pytest tests/ -v`.
+With `VITE_API_BASE_URL` unset, the frontend dev server auto-targets
+`http://localhost:8000/api`.
+
+Run backend tests:
+
+```bash
+cd backend
+pytest tests/ -v --tb=short
+```
 
 ---
 
-## Updating the frontend
+## Updating The Frontend
 
-Vercel rebuilds on every push to the deploy branch — just commit `frontend/`
-source changes and push. There is **no** "build locally and commit static"
-step anymore (that was the old single-service setup).
+Vercel rebuilds from `frontend/` on push. There is no static build copy step and
+no committed `backend/static/` output for the active deployment.
 
-See [CLAUDE.md](../CLAUDE.md) for full architecture and the env-var reference.
+---
+
+## Active API Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | FMS v2 health: service, Sheets, LLM providers |
+| `POST /api/auth/verify-client-code` | Client Job Code login |
+| `POST /api/auth/verify-admin` | Hard-coded admin login |
+| `POST /api/chat/send` | FMS v2 chat |
+
