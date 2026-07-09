@@ -77,7 +77,19 @@ def stub_fms_auth(monkeypatch):
             latency_ms=1,
         )
 
+    async def _fake_pairing(phone, client_job_code):
+        # Valid pairing only for the correct phone; wrong phone => no match.
+        digits = "".join(ch for ch in str(phone) if ch.isdigit())
+        if digits.endswith("9993866117"):
+            return {
+                "client_job_code": client_job_code.strip().upper(),
+                "client_name": "Hindustan Oil",
+                "phone": "9993866117",
+            }
+        return None
+
     monkeypatch.setattr(fms_v2_auth_router, "fetch_fms_records_by_client_code", _fake_fetch)
+    monkeypatch.setattr(fms_v2_auth_router, "authenticate_phone_code", _fake_pairing)
 
 
 @pytest.fixture
@@ -97,7 +109,7 @@ def reset_limiter():
 def test_verify_client_code_happy_path(client, stub_fms_auth, reset_limiter):
     resp = client.post(
         "/api/auth/verify-client-code",
-        json={"client_job_code": " hoacpl-f25f-tl01 "},
+        json={"client_job_code": " hoacpl-f25f-tl01 ", "phone": "+91 99938 66117"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -105,13 +117,31 @@ def test_verify_client_code_happy_path(client, stub_fms_auth, reset_limiter):
     assert body["client_job_code"] == "HOACPL-F25F-TL01"
     assert body["employee_name"] == "Hindustan Oil"
     assert body["user_type"] == "client"
+    assert body["mobile_number"] == "9993866117"
     assert body["access_token"]
+
+
+def test_verify_client_code_wrong_phone_rejected(client, stub_fms_auth, reset_limiter):
+    """Correct code but a phone that isn't paired with it must be rejected."""
+    resp = client.post(
+        "/api/auth/verify-client-code",
+        json={"client_job_code": "HOACPL-F25F-TL01", "phone": "9999999999"},
+    )
+    assert resp.status_code == 401
+
+
+def test_verify_client_code_missing_phone_is_422(client, stub_fms_auth, reset_limiter):
+    resp = client.post(
+        "/api/auth/verify-client-code",
+        json={"client_job_code": "HOACPL-F25F-TL01"},
+    )
+    assert resp.status_code == 422
 
 
 def test_verify_client_code_unknown_code(client, stub_fms_auth, reset_limiter):
     resp = client.post(
         "/api/auth/verify-client-code",
-        json={"client_job_code": "MISSING-F25F-TL01"},
+        json={"client_job_code": "MISSING-F25F-TL01", "phone": "9993866117"},
     )
     assert resp.status_code == 401
 
@@ -121,7 +151,7 @@ def test_verify_client_code_rate_limited(client, stub_fms_auth, reset_limiter):
     codes = [
         client.post(
             "/api/auth/verify-client-code",
-            json={"client_job_code": "MISSING-F25F-TL01"},
+            json={"client_job_code": "MISSING-F25F-TL01", "phone": "9993866117"},
         ).status_code
         for _ in range(6)
     ]

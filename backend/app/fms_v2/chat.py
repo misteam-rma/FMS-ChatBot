@@ -10,6 +10,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
+from app.fms_v2.admin_sources import fetch_extra_admin_records
 from app.fms_v2.config import FMS_SHEET_NAMES, FmsSheetName
 from app.fms_v2.llm import GenerateFmsAnswerInput, LlmResult, generate_fms_answer
 from app.fms_v2.models import (
@@ -334,13 +335,36 @@ async def _chat_for_admin(
                     )
                 )
 
-    if LIST_TERMS_RE.search(data.message):
+    # Admins can reach extra tabs (RAW DATA phones, dashboards) when the query
+    # calls for them. Fetch these FIRST: a phone/dashboard query must win over
+    # the generic "list all codes" table below.
+    recent_context = " ".join(
+        str(m.get("content", "")) for m in (data.chat_history or [])[-4:]
+    )
+    try:
+        extra = await fetch_extra_admin_records(data.message, recent_context)
+    except Exception:
+        logger.exception("FMS v2 admin extra-source fetch failed")
+        extra = []
+
+    # The deterministic code-list table only applies when the query is purely a
+    # "list the codes" ask AND no richer extra source (phone/dashboard) matched.
+    if not extra and LIST_TERMS_RE.search(data.message):
         return FmsV2ChatResponse(reply=format_admin_client_list(records))
 
-    ranked_records = rank_records_for_question(records, data.message, limit=24)
+    if extra:
+        # Extra records (RAW DATA phones etc.) are lean, so we can carry many —
+        # important for "list N phones / all phones" queries where token-ranking
+        # gives no signal. They lead the set and are never trimmed by FMS volume.
+        ranked_extra = rank_records_for_question(extra, data.message, limit=40)
+        ranked_fms = rank_records_for_question(list(records), data.message, limit=4)
+        ranked_records = ranked_extra + ranked_fms
+    else:
+        ranked_records = rank_records_for_question(list(records), data.message, limit=24)
+
     if not ranked_records:
         return FmsV2ChatResponse(
-            reply="FMS1-FMS4 mein is query se related koi matching record nahi mila."
+            reply="Is query se related koi matching record nahi mila."
         )
 
     return await _answer_with_llm(
@@ -420,7 +444,9 @@ def build_fms_chat_prompt(
         f"{LANGUAGE_RULES}\n\n"
         "Authorization:\n"
         "- If role is client, answer only for the authenticated Client Job Code.\n"
-        "- If role is admin, answer across FMS1-FMS4 only.\n\n"
+        "- If role is admin, answer from any sheet present in the tool output "
+        "(FMS1-FMS4, and when included, RAW DATA, NEW DASH, Completed Dash). "
+        "RAW DATA holds client contact details such as Mobile Number.\n\n"
         "Reasoning:\n"
         "- Use exact Client Job Code matches.\n"
         "- FMS workflow columns repeat by step context, such as Doer, Planned, "
@@ -432,6 +458,9 @@ def build_fms_chat_prompt(
         "- Avoid over-answering if the query asks for one field."
     )
 
+    # Report the sheets actually present so the LLM cites the real source.
+    present_sheets = list(dict.fromkeys(r.sheet_name for r in records)) or list(FMS_SHEET_NAMES)
+
     def build_payload(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "role": role,
@@ -439,14 +468,16 @@ def build_fms_chat_prompt(
             "question": question,
             "chat_history": list((chat_history or [])[-6:]),
             "schema_notes": {
-                "sheets": list(FMS_SHEET_NAMES),
+                "sheets": present_sheets,
                 "workflow_columns": ["Doer", "Planned", "Actual", "URL", "Remark", "Status"],
                 "citation_required": "Cite sheet_name, row_number, and column_name for every value.",
             },
             "tool_results": tool_results,
         }
 
-    tool_results = records_to_prompt_payload(question, records)
+    # `records` is already ranked/capped by the caller; don't re-cap here — the
+    # char-budget loop below is the real size limiter.
+    tool_results = records_to_prompt_payload(question, records, max_records=len(records) or 1)
     # FMS rows are extremely wide (166-209 columns), so a broad admin query can
     # serialize past the LLM message limit. Trim records until the built user
     # message fits the character budget, keeping the highest-ranked records.
@@ -615,9 +646,11 @@ def rank_records_for_question(
         scored.append((score, -index, record))
 
     scored.sort(reverse=True)
-    return [record for score, _index, record in scored[:limit] if score > 0] or [
-        record for _score, _index, record in scored[:limit]
-    ]
+    # Keep the top `limit` records by score, preserving insertion order for ties
+    # and zero-score records. Previously a `score > 0` filter dropped every
+    # zero-score record, which collapsed broad "list all phones" queries (whose
+    # keywords match column names, not row values) down to a single row.
+    return [record for _score, _index, record in scored[:limit]]
 
 
 async def fetch_all_fms_records(

@@ -12,6 +12,7 @@ from app.fms_v2.models import (
     FmsV2LoginResponse,
     FetchFmsRecordsInput,
 )
+from app.fms_v2.auth_sheet import authenticate_phone_code, normalize_phone
 from app.fms_v2.sheets import fetch_fms_records_by_client_code
 from app.utils.auth import create_access_token
 from app.utils.limiter import limiter
@@ -24,11 +25,36 @@ logger = logging.getLogger("botivate_api.fms_v2.auth")
 @router.post("/verify-client-code", response_model=FmsV2LoginResponse)
 @limiter.limit("5/minute")
 async def verify_client_code(request: Request, data: ClientCodeLoginRequest):
-    """Authenticate a client by exact Client Job Code across FMS1-FMS4."""
+    """Authenticate a client by phone + Client Job Code pairing.
+
+    The phone and code must appear in the SAME RAW DATA row (col P code,
+    col R mobile). Then the code is used to fetch the client's FMS1-FMS4 data.
+    """
 
     client_job_code = data.client_job_code
     logger.info("FMS v2 client auth start client_job_code=%s", client_job_code)
 
+    # 1) Phone + code must be a valid pairing in RAW DATA.
+    try:
+        pairing = await authenticate_phone_code(data.phone, client_job_code)
+    except Exception as exc:
+        logger.exception("FMS v2 client auth pairing lookup failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Client authentication is temporarily unavailable.",
+        ) from exc
+
+    if not pairing:
+        logger.warning(
+            "FMS v2 client auth rejected: phone+code pairing not found code=%s",
+            client_job_code,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Phone number and Client Job Code do not match our records.",
+        )
+
+    # 2) Confirm the code has FMS1-FMS4 data to serve.
     result = await fetch_fms_records_by_client_code(
         FetchFmsRecordsInput(client_job_code=client_job_code)
     )
@@ -50,14 +76,15 @@ async def verify_client_code(request: Request, data: ClientCodeLoginRequest):
             detail="Client Job Code not found.",
         )
 
-    employee_name = next(
-        (record.client_name for record in result.records if record.client_name),
-        "Client",
+    employee_name = (
+        pairing.get("client_name")
+        or next((record.client_name for record in result.records if record.client_name), "Client")
     )
+    normalized_phone = normalize_phone(data.phone)
     token_data = {
         "employee_id": result.client_job_code,
         "employee_name": employee_name,
-        "mobile_number": "",
+        "mobile_number": normalized_phone,
         "user_type": "client",
         "client_job_code": result.client_job_code,
     }
@@ -73,6 +100,7 @@ async def verify_client_code(request: Request, data: ClientCodeLoginRequest):
         access_token=access_token,
         employee_id=result.client_job_code,
         employee_name=employee_name,
+        mobile_number=normalized_phone,
         user_type="client",
         client_job_code=result.client_job_code,
     )

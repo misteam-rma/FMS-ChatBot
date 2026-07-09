@@ -74,7 +74,7 @@ There is no canonical root `.env.example`.
 | `ALLOWED_ORIGINS` | Comma-separated frontend origins; use explicit Vercel URL in production |
 | `JWT_SECRET_KEY` | JWT signing secret; use 32+ random chars |
 | `APP_SECRET_KEY` | Strong random app secret |
-| `GOOGLE_SHEET_ID` | `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8` |
+| `GOOGLE_SHEET_ID` | `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Full service-account JSON on one line |
 | `CEREBRAS_API_KEY` / `CEREBRAS_MODEL` | First LLM provider; default model `gpt-oss-120b` |
 | `GROQ_API_KEY` / `GROQ_MODEL` | Second LLM provider; default model `gpt-oss-120b` |
@@ -120,7 +120,7 @@ agent are not part of the cleaned backend.
 
 Workbook: `ChatBot-FMS-RMA`
 
-Workbook ID: `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8`
+Workbook ID: `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok`
 
 | Sheet | GID | Header row | Client Job Code column |
 |---|---:|---:|---|

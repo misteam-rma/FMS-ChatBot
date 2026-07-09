@@ -21,7 +21,7 @@ that origin through `ALLOWED_ORIGINS`.
 
 - GitHub repo connected to Render and Vercel
 - Google service-account JSON with access to workbook `ChatBot-FMS-RMA`
-- Google Sheet ID: `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8`
+- Google Sheet ID: `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok`
 - At least one configured LLM provider key:
   - Cerebras, Groq, NVIDIA, or OpenAI
 - `JWT_SECRET_KEY`: generate with:
@@ -52,7 +52,7 @@ Backend env vars, from `backend/.env.example`:
 | `ALLOWED_ORIGINS` | Vercel origin, set after frontend deploy |
 | `JWT_SECRET_KEY` | 32+ random chars |
 | `APP_SECRET_KEY` | strong random string |
-| `GOOGLE_SHEET_ID` | `1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8` |
+| `GOOGLE_SHEET_ID` | `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | full service-account JSON, single line |
 | `CEREBRAS_API_KEY` | optional, first provider |
 | `CEREBRAS_MODEL` | `gpt-oss-120b` |

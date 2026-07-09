@@ -12,7 +12,7 @@ def test_fms_v2_settings_define_only_allowed_sheets():
 
     settings = get_fms_v2_settings()
 
-    assert DEFAULT_FMS_WORKBOOK_ID == "1LGlV-zPDUFtsLNCZXw7xv4f1AE-mfdjqZVqxetVg_s8"
+    assert DEFAULT_FMS_WORKBOOK_ID == "10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok"
     assert settings.sheet_names == ("FMS1", "FMS2", "FMS3", "FMS4")
     assert FMS_SHEET_NAMES == settings.sheet_names
     assert FMS_HEADER_ROW == 6
@@ -27,7 +27,7 @@ def test_fms_v2_settings_define_only_allowed_sheets():
 def test_fms_v2_client_code_model_normalizes_code():
     from app.fms_v2.models import ClientCodeLoginRequest, FetchFmsRecordsInput
 
-    login = ClientCodeLoginRequest(client_job_code="  hoacpl-f25f-tl01  ")
+    login = ClientCodeLoginRequest(client_job_code="  hoacpl-f25f-tl01  ", phone="9993866117")
     fetch = FetchFmsRecordsInput(client_job_code="ABC   F25F   TL01")
 
     assert login.client_job_code == "HOACPL-F25F-TL01"

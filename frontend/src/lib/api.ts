@@ -49,15 +49,21 @@ async function parseError(res: Response, fallback: string): Promise<string> {
   }
 }
 
-export async function loginClientCode(clientJobCode: string): Promise<AuthResponse> {
+export async function loginClientCode(
+  clientJobCode: string,
+  phone: string,
+): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/verify-client-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_job_code: clientJobCode.trim().toUpperCase() }),
+    body: JSON.stringify({
+      client_job_code: clientJobCode.trim().toUpperCase(),
+      phone: phone.trim(),
+    }),
   });
 
   if (!res.ok) {
-    throw new Error(await parseError(res, "Invalid Client Job Code or login failed"));
+    throw new Error(await parseError(res, "Invalid phone number or Client Job Code"));
   }
   return res.json();
 }
@@ -75,11 +81,49 @@ export async function loginAdmin(username: string, password: string): Promise<Au
   return res.json();
 }
 
+export interface BankCard {
+  bank: string;
+  amount: number;
+  progress: number;
+  completed: number;
+  applicable: number;
+  is_completed: boolean;
+}
+
+export interface ChatAction {
+  quick_replies?: string[];
+  cards?: BankCard[];
+  progress?: number;
+}
+
+export interface ChatReply {
+  reply: string;
+  actions?: ChatAction[] | null;
+}
+
+/** Extract quick-reply button labels from a chat/intent response. */
+export function quickRepliesOf(res: ChatReply): string[] {
+  const first = res.actions?.find((a) => Array.isArray(a?.quick_replies));
+  return first?.quick_replies ?? [];
+}
+
+/** Extract bank cards, if any, from a response. */
+export function cardsOf(res: ChatReply): BankCard[] {
+  const first = res.actions?.find((a) => Array.isArray(a?.cards));
+  return first?.cards ?? [];
+}
+
+/** Extract a single-project progress %, if present. */
+export function progressOf(res: ChatReply): number | undefined {
+  const first = res.actions?.find((a) => typeof a?.progress === "number");
+  return first?.progress;
+}
+
 export async function sendChat(
   token: string,
   message: string,
   history: ChatHistoryItem[],
-): Promise<{ reply: string }> {
+): Promise<ChatReply> {
   const res = await fetch(`${API_BASE}/chat/send`, {
     method: "POST",
     headers: {
@@ -91,6 +135,26 @@ export async function sendChat(
 
   if (!res.ok) {
     throw new Error(await parseError(res, "Failed to send message"));
+  }
+  return res.json();
+}
+
+/**
+ * Trigger a deterministic menu intent (button click). Answered from the
+ * dashboard tabs without the LLM. Free-typed messages use sendChat instead.
+ */
+export async function sendIntent(token: string, intent: string): Promise<ChatReply> {
+  const res = await fetch(`${API_BASE}/chat/intent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ intent }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await parseError(res, "Failed to run action"));
   }
   return res.json();
 }

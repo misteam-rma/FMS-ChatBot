@@ -207,6 +207,16 @@ def fetch_sheet_values_from_google(sheet_name: FmsSheetName) -> SheetValues:
     if sheet_name not in FMS_SHEET_NAMES:
         raise ValueError(f"Sheet '{sheet_name}' is not allowed for FMS v2.")
 
+    return fetch_worksheet_values(sheet_name)
+
+
+def fetch_worksheet_values(worksheet_name: str) -> SheetValues:
+    """Read raw values for any worksheet in the configured workbook.
+
+    Used by both the FMS1-FMS4 parser and the dashboard (NEW DASH / Completed
+    Dash / RUF Help Sheet / Sanction Letter) readers. Read-only.
+    """
+
     import gspread
 
     fms_settings = get_fms_v2_settings()
@@ -221,7 +231,7 @@ def fetch_sheet_values_from_google(sheet_name: FmsSheetName) -> SheetValues:
 
     client = gspread.service_account_from_dict(service_account_info)
     spreadsheet = client.open_by_key(fms_settings.workbook_id)
-    worksheet = spreadsheet.worksheet(sheet_name)
+    worksheet = spreadsheet.worksheet(worksheet_name)
     return worksheet.get_all_values()
 
 
@@ -351,10 +361,23 @@ def build_unique_column_names(values: SheetValues, header_index: int) -> list[Pa
     return columns
 
 
-def normalize_client_job_code(value: str) -> str:
-    """Normalize Client Job Code for exact matching."""
+# Unicode dash variants that must fold to an ASCII "-" so codes like
+# "GA-F25F-TL11" match regardless of whether a non-breaking hyphen (U+2011),
+# en/em dash, or figure dash slipped in via a sheet, keyboard, or autofill.
+_DASH_VARIANTS = str.maketrans(
+    {c: "-" for c in "‐‑‒–—―−﹘﹣－"}
+)
 
-    return " ".join(str(value or "").strip().upper().split())
+
+def normalize_client_job_code(value: str) -> str:
+    """Normalize Client Job Code for exact matching.
+
+    Folds Unicode dash variants to ASCII '-', uppercases, trims, and collapses
+    internal whitespace.
+    """
+
+    text = str(value or "").translate(_DASH_VARIANTS)
+    return " ".join(text.strip().upper().split())
 
 
 def normalize_header(value: str) -> str:

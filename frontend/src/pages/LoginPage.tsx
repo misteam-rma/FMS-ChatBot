@@ -14,6 +14,7 @@ export default function LoginPage() {
   const [activeTab, setActiveTab] = useState("client");
 
   const [clientJobCode, setClientJobCode] = useState("");
+  const [clientPhone, setClientPhone] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -30,6 +31,15 @@ export default function LoginPage() {
     setError("");
     
     const normalizedCode = clientJobCode.trim().toUpperCase();
+    const normalizedPhone = clientPhone.trim();
+    if (!normalizedPhone) {
+      setError("Please enter your registered phone number.");
+      return;
+    }
+    if (normalizedPhone.replace(/\D/g, "").length < 10) {
+      setError("Please enter a valid phone number.");
+      return;
+    }
     if (!normalizedCode) {
       setError("Please enter your Client Job Code.");
       return;
@@ -41,7 +51,7 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      const data = await loginClientCode(normalizedCode);
+      const data = await loginClientCode(normalizedCode, normalizedPhone);
       setSession({
         token: data.access_token,
         user: {
@@ -126,6 +136,23 @@ export default function LoginPage() {
           <div className="p-8">
             <TabsContent value="client" className="m-0 focus-visible:outline-none">
               <form onSubmit={handleClientLogin} className="space-y-6">
+                <div className="space-y-2">
+                  <Label htmlFor="client-phone" className="text-sm font-medium">
+                    Registered Phone Number
+                  </Label>
+                  <Input
+                    id="client-phone"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={20}
+                    value={clientPhone}
+                    onChange={(e) => setClientPhone(e.target.value)}
+                    placeholder="Enter your registered mobile number"
+                    className="h-12"
+                    disabled={isLoading}
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="client-job-code" className="text-sm font-medium">
                     Client Job Code

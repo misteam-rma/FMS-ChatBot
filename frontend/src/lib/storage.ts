@@ -10,10 +10,25 @@ export interface Session {
   user: SessionUser;
 }
 
+export interface BankCardData {
+  bank: string;
+  amount: number;
+  progress: number;
+  completed: number;
+  applicable: number;
+  is_completed: boolean;
+}
+
 export interface ChatMessage {
   role: "user" | "ai";
   content: string;
   timestamp: string;
+  /** Quick-reply button labels returned by a menu intent (AI messages only). */
+  quickReplies?: string[];
+  /** Tappable bank cards (Status/Banks intents). */
+  cards?: BankCardData[];
+  /** Single-project completion % for a progress bar. */
+  progress?: number;
 }
 
 const SESSION_KEY = "rma_session";
@@ -44,17 +59,24 @@ export function clearSession(): void {
   keysToRemove.forEach((key) => localStorage.removeItem(key));
 }
 
-export function getChatHistory(token: string): ChatMessage[] {
+// History must be keyed uniquely PER USER. The JWT's first 8 chars are the
+// shared header (eyJhbGci...) for every token, so keying on token.slice(0,8)
+// made all users collide into one bucket (admin history leaking into a client
+// session). Key on the identity carried in the session instead.
+function historyKey(session: Session): string {
+  const id = session.user.clientJobCode || session.user.name || "anon";
+  return `rma_chat_history_${session.user.role}_${id}`;
+}
+
+export function getChatHistory(session: Session): ChatMessage[] {
   try {
-    const key = `rma_chat_history_${token.slice(0, 8)}`;
-    const data = localStorage.getItem(key);
+    const data = localStorage.getItem(historyKey(session));
     return data ? JSON.parse(data) : [];
   } catch {
     return [];
   }
 }
 
-export function saveChatHistory(token: string, messages: ChatMessage[]): void {
-  const key = `rma_chat_history_${token.slice(0, 8)}`;
-  localStorage.setItem(key, JSON.stringify(messages));
+export function saveChatHistory(session: Session, messages: ChatMessage[]): void {
+  localStorage.setItem(historyKey(session), JSON.stringify(messages));
 }
