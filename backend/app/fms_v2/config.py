@@ -33,7 +33,8 @@ CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-FMS_V2_LLM_TIMEOUT_SECONDS = 20.0
+# Fail fast to the next provider so total fallback latency stays low.
+FMS_V2_LLM_TIMEOUT_SECONDS = 12.0
 
 
 @dataclass(frozen=True)

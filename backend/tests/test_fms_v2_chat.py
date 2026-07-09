@@ -106,7 +106,9 @@ def test_prompt_builder_includes_strict_rules_and_structured_sources():
 
     assert prompt.messages[0].role == "system"
     assert "Never fabricate missing values" in prompt.messages[0].content
-    assert "Default to Hinglish in Latin script" in prompt.messages[0].content
+    # Language must mirror the user, not default to Hinglish.
+    assert "mirror the user's message" in prompt.messages[0].content
+    assert "reply ONLY in plain English" in prompt.messages[0].content
     data_message = prompt.messages[1].content
     assert '"sheet_name": "FMS1"' in data_message
     assert '"row_number": 7' in data_message
@@ -207,10 +209,27 @@ def test_admin_client_list_is_deterministic_and_cited():
 
     reply = format_admin_client_list(records)
 
+    # Summary caption.
     assert "Unique Client Job Codes: 2" in reply
-    assert "HOACPL-F25F-TL01" in reply
-    assert "Rows: 2" in reply
-    assert "Source: FMS1 row 7, column Client Job Code." in reply
+    # Valid GFM table: header + separator row.
+    assert "| # | Client Job Code | Client Name | Rows | Source |" in reply
+    assert "|---|---|---|---:|---|" in reply
+    # A data row with grouped count and per-row source citation.
+    assert "| 1 | HOACPL-F25F-TL01 |" in reply  # sorted first, 2 grouped rows
+    assert "FMS1 row 7, col Client Job Code" in reply
+    # Every data row is valid table markup (starts and ends with a pipe).
+    data_rows = [ln for ln in reply.splitlines() if ln.startswith("| ") and "row" in ln]
+    assert len(data_rows) == 2  # two unique codes
+
+
+def test_admin_client_list_escapes_pipes_in_names():
+    record = sample_record("ABC-F25F-TL01", "FMS1", 7)
+    record.client_name = "Foo | Bar Ltd"
+
+    reply = format_admin_client_list([record])
+
+    # A literal pipe in the name must be escaped so it does not split the cell.
+    assert r"Foo \| Bar Ltd" in reply
 
 
 @pytest.mark.asyncio
@@ -242,6 +261,40 @@ async def test_admin_tell_me_some_client_job_codes_is_list_query():
     )
 
     assert "Unique Client Job Codes: 2" in response.reply
+    assert "ITPL-F25E-SUBCC02" in response.reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Give me all client job codes",
+        "give me all the client codes",
+        "show me all clients",
+        "how many client codes are there",
+        "total clients",
+        "sabhi client codes batao",
+        "list clients",
+    ],
+)
+async def test_admin_list_intent_routes_to_deterministic_table(message):
+    """Natural 'list all codes' phrasings must hit the deterministic table
+    path (all records, real table) and never the record-capped LLM path."""
+
+    async def fake_generate(_prompt):
+        raise AssertionError(f"llm should not be called for list query: {message!r}")
+
+    response = await chat_with_fms_v2(
+        FmsV2ChatMessage(message=message),
+        admin_user(),
+        generate_answer_fn=fake_generate,
+        admin_records=[sample_record(), sample_record("ITPL-F25E-SUBCC02", "FMS4", 20)],
+    )
+
+    # Full deterministic table with both codes, not an LLM subset.
+    assert "Unique Client Job Codes: 2" in response.reply
+    assert "|---|---|---|---:|---|" in response.reply
+    assert "HOACPL-F25F-TL01" in response.reply
     assert "ITPL-F25E-SUBCC02" in response.reply
 
 
@@ -288,3 +341,89 @@ def test_prompt_builder_stays_within_message_char_limit_for_wide_records():
     # fit the char budget (and thus the LlmMessage 80k limit).
     user_message = next(m for m in prompt.messages if m.role == "user")
     assert len(user_message.content) <= PROMPT_CONTENT_CHAR_BUDGET
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "hi",
+        "Hello!",
+        "hey",
+        "namaste",
+        "namaste kaise ho",
+        "hello there",
+        "good morning sir",
+        "how are you",
+        "help",
+        "thanks",
+        "ok",
+        "  ",
+        "yo",
+    ],
+)
+def test_greeting_detector_matches_small_talk(message):
+    from app.fms_v2.chat import is_greeting_or_small_talk
+
+    assert is_greeting_or_small_talk(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "HOACPL-F25F-TL01 ka status batao",
+        "show me all client codes",
+        "what is the planned date for step 3",
+        "hi, HOACPL-F25F-TL01 ka status kya hai",
+        "hello, mujhe loan amount batao",
+        "namaste, status kya hai",
+    ],
+)
+def test_greeting_detector_ignores_data_queries(message):
+    from app.fms_v2.chat import is_greeting_or_small_talk
+
+    assert is_greeting_or_small_talk(message) is False
+
+
+@pytest.mark.asyncio
+async def test_greeting_calls_llm_without_fetch_and_skips_citation_guard():
+    """Greetings skip the sheet fetch but are answered by the LLM, and the
+    citation guard must NOT reject the (citation-free) small-talk reply."""
+    calls = {}
+
+    async def fake_fetch(_data):
+        raise AssertionError("fetch should not be called for a greeting")
+
+    async def fake_generate(prompt):
+        calls["prompt"] = prompt
+        # A natural greeting reply with no source citation.
+        return LlmResult(ok=True, provider="groq", model="x", content="Hello! How can I help?")
+
+    response = await chat_with_fms_v2(
+        FmsV2ChatMessage(message="hi"),
+        admin_user(),
+        fetch_records_fn=fake_fetch,
+        generate_answer_fn=fake_generate,
+    )
+
+    assert response.reply == "Hello! How can I help?"
+    assert "prompt" in calls  # LLM was called
+
+
+@pytest.mark.asyncio
+async def test_greeting_falls_back_when_llm_fails():
+    from app.fms_v2.chat import SMALL_TALK_FALLBACK_REPLY
+
+    async def fake_fetch(_data):
+        raise AssertionError("fetch should not be called for a greeting")
+
+    async def fake_generate(_prompt):
+        return LlmResult(ok=False, error="all providers failed")
+
+    response = await chat_with_fms_v2(
+        FmsV2ChatMessage(message="hi"),
+        admin_user(),
+        fetch_records_fn=fake_fetch,
+        generate_answer_fn=fake_generate,
+    )
+
+    assert response.reply == SMALL_TALK_FALLBACK_REPLY
