@@ -89,10 +89,23 @@ def test_extract_client_job_codes_normalizes_unique_codes():
     ) == ["HOACPL-F25F-TL01", "ITPL-F25E-SUBCC02"]
 
 
-def test_source_citation_detector_requires_sheet_row_column_or_source_label():
+def test_source_citation_detector_accepts_natural_forms():
+    # Canonical and explicit-label forms.
     assert has_source_citation("Status pending. Source: FMS1 row 7, column Status.")
     assert has_source_citation("Status pending hai. FMS2 row 12, column Remark.")
+    # Bracket citation with row/column words.
+    assert has_source_citation("Loan 49.00 hai 【FMS1, row 7, column Total Loan Amount】")
+    # Bracket citation WITHOUT the words row/column (sheet + ", <number>").
+    assert has_source_citation("Code HOACPL 【FMS1, 27, Client Job Code】")
+    # Sheet + row, no explicit "column" word.
+    assert has_source_citation("Aapka status FMS1 me row 27 par hai")
+    assert has_source_citation("code ACL-F25F-TL24 (FMS1, row 27)")
+
+
+def test_source_citation_detector_rejects_ungrounded_answers():
     assert not has_source_citation("Status pending hai.")
+    assert not has_source_citation("I think your loan is around 50 lakh.")
+    assert not has_source_citation("Sorry, mujhe yeh nahi pata.")
 
 
 def test_prompt_builder_includes_strict_rules_and_structured_sources():

@@ -41,9 +41,18 @@ GenerateAnswerFn = Callable[
 ]
 
 CLIENT_CODE_RE = re.compile(r"\b[A-Z0-9]+-F\d{2}[A-Z]-[A-Z0-9]+\b", re.IGNORECASE)
+# An answer is considered grounded if it references a source. We accept any of
+# the natural forms the LLM produces rather than one rigid order:
+#   - a literal "Source:" label
+#   - a sheet name (FMS1-FMS4) near a row and/or column reference, e.g.
+#     "FMS1 row 7, column Status", "【FMS1, 7, Client Job Code】",
+#     "FMS1, row 27", "(FMS2 row 12)"
+# It still rejects answers that cite no sheet at all (i.e. ungrounded text).
 SOURCE_CITATION_RE = re.compile(
-    r"\bFMS[1-4]\b.*\brow\s+\d+\b.*\bcolumn\b|\bSource\s*:",
-    re.IGNORECASE | re.DOTALL,
+    r"\bSource\s*:"                       # explicit label, or
+    r"|\bFMS[1-4]\b[^\n]{0,60}?"          # a sheet name, followed nearby by
+    r"(\brow\b|\bcol(umn)?\b|,\s*\d+)",   # a row/col word or ", <number>"
+    re.IGNORECASE,
 )
 STATUS_TERMS = {"status", "pending", "done", "complete", "drop", "current", "stage", "step"}
 DATE_TERMS = {"date", "when", "kab", "planned", "actual", "deadline", "due"}
@@ -402,8 +411,11 @@ def build_fms_chat_prompt(
         "You answer only from the provided FMS tool output. The output contains "
         "rows from FMS1, FMS2, FMS3, and FMS4.\n\n"
         "Never fabricate missing values. Never use a value unless it appears in "
-        "the tool output. For each factual claim, cite sheet, row number, and "
-        "column name. If data is missing, say it is missing and mention which "
+        "the tool output. For each factual claim, cite the source in this exact "
+        "format: `Source: <sheet> row <row_number>, column <column_name>` "
+        "(example: `Source: FMS1 row 7, column Status`). You may cite multiple "
+        "values, but every factual answer MUST contain at least one such Source "
+        "line. If data is missing, say it is missing and mention which "
         "sheet/columns were checked.\n\n"
         f"{LANGUAGE_RULES}\n\n"
         "Authorization:\n"
