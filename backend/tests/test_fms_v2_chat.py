@@ -257,3 +257,34 @@ def test_prompt_payload_truncates_large_values_and_caps_fields():
     fields = payload[0]["fields"]
     assert len(fields) <= 10
     assert any("[truncated]" in value for value in fields.values())
+
+
+def test_prompt_builder_stays_within_message_char_limit_for_wide_records():
+    """Broad admin queries over many wide FMS rows must not overflow the LLM
+    message limit (regression for the string_too_long 500)."""
+    from app.fms_v2.chat import PROMPT_CONTENT_CHAR_BUDGET
+
+    def wide_record(index):
+        record = sample_record(code=f"WIDE-F25F-{index:03d}", row=index + 7)
+        record.step_fields = {
+            f"Step {step} - Remark": "y" * 400 for step in range(200)
+        }
+        record.source_columns = {
+            name: source("FMS1", index + 7, name, "Z")
+            for name in record.step_fields
+        }
+        return record
+
+    records = [wide_record(i) for i in range(40)]
+
+    prompt = build_fms_chat_prompt(
+        role="admin",
+        question="give me an overview of all files",
+        records=records,
+        authenticated_client_job_code=None,
+    )
+
+    # Building the prompt must not raise, and the serialized user message must
+    # fit the char budget (and thus the LlmMessage 80k limit).
+    user_message = next(m for m in prompt.messages if m.role == "user")
+    assert len(user_message.content) <= PROMPT_CONTENT_CHAR_BUDGET

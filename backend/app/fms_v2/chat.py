@@ -52,6 +52,9 @@ LIST_TERMS_RE = re.compile(
     r"\b(list|show|tell|dikhao|batao)\b.*\b(clients?|codes?|job codes?)\b",
     re.I,
 )
+# Hard ceiling on the built user message. Stays well under the LlmMessage 80k
+# limit and leaves room for the system prompt and the model's context window.
+PROMPT_CONTENT_CHAR_BUDGET = 60000
 
 
 async def chat_with_fms_v2(
@@ -291,24 +294,43 @@ def build_fms_chat_prompt(
         "- Avoid over-answering if the query asks for one field."
     )
 
-    payload = {
-        "role": role,
-        "authenticated_client_job_code": authenticated_client_job_code,
-        "question": question,
-        "chat_history": list((chat_history or [])[-6:]),
-        "schema_notes": {
-            "sheets": list(FMS_SHEET_NAMES),
-            "workflow_columns": ["Doer", "Planned", "Actual", "URL", "Remark", "Status"],
-            "citation_required": "Cite sheet_name, row_number, and column_name for every value.",
-        },
-        "tool_results": records_to_prompt_payload(question, records),
-    }
+    def build_payload(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "role": role,
+            "authenticated_client_job_code": authenticated_client_job_code,
+            "question": question,
+            "chat_history": list((chat_history or [])[-6:]),
+            "schema_notes": {
+                "sheets": list(FMS_SHEET_NAMES),
+                "workflow_columns": ["Doer", "Planned", "Actual", "URL", "Remark", "Status"],
+                "citation_required": "Cite sheet_name, row_number, and column_name for every value.",
+            },
+            "tool_results": tool_results,
+        }
 
-    user_content = (
+    tool_results = records_to_prompt_payload(question, records)
+    # FMS rows are extremely wide (166-209 columns), so a broad admin query can
+    # serialize past the LLM message limit. Trim records until the built user
+    # message fits the character budget, keeping the highest-ranked records.
+    prefix = (
         "Use this deterministic FMS tool output to answer the user's question. "
         "Do not assume anything outside this JSON.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
+    while tool_results:
+        payload = build_payload(tool_results)
+        user_content = prefix + json.dumps(payload, ensure_ascii=False, indent=2)
+        if len(user_content) <= PROMPT_CONTENT_CHAR_BUDGET:
+            break
+        # Drop the lowest-ranked record and retry.
+        tool_results = tool_results[:-1]
+    else:
+        user_content = prefix + json.dumps(build_payload([]), ensure_ascii=False, indent=2)
+
+    if not tool_results:
+        logger.warning(
+            "FMS v2 prompt trimmed to zero records under char budget; "
+            "records may be too wide to serialize."
+        )
     return GenerateFmsAnswerInput(
         messages=[
             {"role": "system", "content": system_prompt},
