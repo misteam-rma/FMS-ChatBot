@@ -6,14 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { loginClient, loginAdmin } from "@/lib/api";
+import { loginClientCode, loginAdmin } from "@/lib/api";
 import { setSession } from "@/lib/storage";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState("client");
 
-  const [mobile, setMobile] = useState("");
+  const [clientJobCode, setClientJobCode] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -29,20 +29,25 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     
-    if (mobile.length !== 10 || !/^\d+$/.test(mobile)) {
-      setError("Please enter a valid 10-digit mobile number.");
+    const normalizedCode = clientJobCode.trim().toUpperCase();
+    if (!normalizedCode) {
+      setError("Please enter your Client Job Code.");
+      return;
+    }
+    if (normalizedCode.length > 80) {
+      setError("Client Job Code is too long.");
       return;
     }
 
     setIsLoading(true);
     try {
-      const data = await loginClient(mobile);
+      const data = await loginClientCode(normalizedCode);
       setSession({
         token: data.access_token,
         user: {
           name: data.employee_name || "Client",
           role: "client",
-          mobile,
+          clientJobCode: data.client_job_code || normalizedCode,
         },
       });
 
@@ -122,17 +127,17 @@ export default function LoginPage() {
             <TabsContent value="client" className="m-0 focus-visible:outline-none">
               <form onSubmit={handleClientLogin} className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="mobile" className="text-sm font-medium">
-                    Registered Mobile Number
+                  <Label htmlFor="client-job-code" className="text-sm font-medium">
+                    Client Job Code
                   </Label>
                   <Input
-                    id="mobile"
+                    id="client-job-code"
                     type="text"
-                    inputMode="numeric"
-                    maxLength={10}
-                    value={mobile}
-                    onChange={(e) => setMobile(e.target.value.replace(/\D/g, ""))}
-                    placeholder="Enter 10-digit mobile number"
+                    autoCapitalize="characters"
+                    maxLength={80}
+                    value={clientJobCode}
+                    onChange={(e) => setClientJobCode(e.target.value.toUpperCase())}
+                    placeholder="Enter Client Job Code"
                     className="h-12"
                     disabled={isLoading}
                   />
@@ -146,7 +151,7 @@ export default function LoginPage() {
                   disabled={isLoading}
                 >
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Login with Mobile
+                  Login with Client Job Code
                 </Button>
               </form>
             </TabsContent>

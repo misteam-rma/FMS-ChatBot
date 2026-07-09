@@ -1,9 +1,8 @@
 """
 Shared pytest fixtures for the Finance FMS backend test suite.
 
-These fixtures spin up the FastAPI app with the DB dependency and the
-Google Sheets adapter stubbed out, so tests never touch a live database
-or the Google Sheets API.
+These fixtures spin up the FastAPI app with live external health checks stubbed,
+so tests never touch Google Sheets or LLM providers unless a test opts in.
 """
 
 import os
@@ -55,21 +54,38 @@ def app():
 
 @pytest.fixture
 def client(app):
-    """A TestClient with the DB dependency overridden and lifespan disabled.
-
-    The app's lifespan calls init_db + auto_setup_database against the real
-    engine, which we don't want in unit tests. We deliberately construct the
-    TestClient WITHOUT the `with` context manager so Starlette never fires the
-    startup/shutdown (lifespan) events. The get_db override supplies a fake
-    session, so the health route's DB check still exercises real route logic.
-    """
+    """A TestClient with live health checks overridden and lifespan disabled."""
     from fastapi.testclient import TestClient
-    from app.database import get_db
+    from app.main import get_health_checker
 
-    async def _fake_get_db():
-        yield FakeSession()
+    async def _fake_health_check():
+        return {
+            "status": "healthy",
+            "service": "healthy",
+            "database": "not_used",
+            "google_sheets": {
+                "status": "healthy",
+                "workbook_id": "test-workbook",
+                "checked_sheet": "FMS1",
+                "header_row": 6,
+            },
+            "llm_providers": {
+                "status": "configured",
+                "configured_count": 1,
+                "providers": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-4o-mini",
+                        "configured": True,
+                    }
+                ],
+            },
+        }
 
-    app.dependency_overrides[get_db] = _fake_get_db
+    def _fake_get_health_checker():
+        return _fake_health_check
+
+    app.dependency_overrides[get_health_checker] = _fake_get_health_checker
     # No `with` block => lifespan startup/shutdown is skipped.
     # raise_server_exceptions=False so 500s come back as responses, not raises.
     test_client = TestClient(app, raise_server_exceptions=False)

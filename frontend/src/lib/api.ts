@@ -31,7 +31,8 @@ export interface AuthResponse {
   employee_id: string;
   employee_name: string;
   mobile_number?: string;
-  user_type: string; // "employee" | "admin"
+  user_type: string; // "client" | "admin"
+  client_job_code?: string | null;
 }
 
 export interface ChatHistoryItem {
@@ -48,15 +49,15 @@ async function parseError(res: Response, fallback: string): Promise<string> {
   }
 }
 
-export async function loginClient(mobile: string): Promise<AuthResponse> {
-  const res = await fetch(`${API_BASE}/auth/verify-mobile`, {
+export async function loginClientCode(clientJobCode: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/verify-client-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mobile_number: mobile }),
+    body: JSON.stringify({ client_job_code: clientJobCode.trim().toUpperCase() }),
   });
 
   if (!res.ok) {
-    throw new Error(await parseError(res, "Invalid mobile number or login failed"));
+    throw new Error(await parseError(res, "Invalid Client Job Code or login failed"));
   }
   return res.json();
 }

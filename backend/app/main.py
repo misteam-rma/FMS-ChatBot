@@ -1,16 +1,17 @@
 """
 Botivate HR Support - FastAPI Application Entry Point
-Registers all routers, initializes DB, and starts the background scheduler.
+Registers the FMS v2 API routers.
 """
 
 from contextlib import asynccontextmanager
 import os
 import time
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import AsyncSession
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 from app.utils.limiter import limiter
@@ -24,41 +25,29 @@ logging.basicConfig(
 logger = logging.getLogger("botivate_api")
 
 from app.config import settings
-from app.database import init_db, async_session_factory, get_db
-from app.routers.company_router import router as company_router
-from app.routers.auth_router import router as auth_router
-from app.routers.chat_router import router as chat_router
-from app.services.auto_setup import auto_setup_database
+from app.fms_v2.health import check_fms_v2_health
+from app.routers.fms_v2_auth_router import router as auth_router
+from app.routers.fms_v2_chat_router import router as chat_router
 
 
-# ── Background Scheduler ─
-
-scheduler = AsyncIOScheduler()
+HealthChecker = Callable[[], Awaitable[dict[str, Any]]]
 
 
 # ── App Lifespan ──────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: validate secrets, create tables, auto-setup DB, start scheduler. Shutdown: stop scheduler."""
+    """Startup: validate secrets. FMS v2 does not initialize SQLite."""
     settings.validate_production_secrets()
-    await init_db()
-
-    # Auto-setup database on first startup
-    async with async_session_factory() as session:
-        await auto_setup_database(session)
-
-    scheduler.start()
-    print(f"🚀 {settings.app_name} is running!")
+    print(f"🚀 {settings.app_name} FMS v2 API is running!")
     yield
-    scheduler.shutdown()
 
 
 # ── Create FastAPI App ────────────────────────────────────
 
 app = FastAPI(
     title=settings.app_name,
-    description="Agentic AI-powered HR Support System - Fully Dynamic, Multi-Company",
+    description="FMS v2 sheet-backed chatbot API",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -88,7 +77,7 @@ async def log_requests(request: Request, call_next):
                     import json
                     body_json = json.loads(body_str)
                     redacted = False
-                    for key in ["password", "mobile_number", "access_token", "token"]:
+                    for key in ["password", "mobile_number", "client_job_code", "access_token", "token"]:
                         if key in body_json:
                             body_json[key] = "***REDACTED***"
                             redacted = True
@@ -149,56 +138,18 @@ app.add_middleware(
 
 # ── Register Routers ─────────────────────────────────────
 
-app.include_router(company_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 
 # ── Health Check ──────────────────────────────────────────
 
+def get_health_checker() -> HealthChecker:
+    return check_fms_v2_health
+
+
 @app.get("/api/health")
-async def health(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import text, select
-    from app.models.models import DatabaseConnection
-    from app.adapters.adapter_factory import get_adapter
-
-    health_status = {
-        "status": "healthy",
-        "database": "untested",
-        "google_sheets": "untested"
-    }
-    
-    # Check SQLite database
-    try:
-        await db.execute(text("SELECT 1"))
-        health_status["database"] = "healthy"
-    except Exception as e:
-        logger.error(f"Health check DB error: {e}")
-        health_status["database"] = f"unhealthy: {str(e)}"
-        health_status["status"] = "degraded"
-        
-    # Check Google Sheets Connection
-    try:
-        result = await db.execute(
-            select(DatabaseConnection).where(
-                DatabaseConnection.is_active == True
-            )
-        )
-        db_conn = result.scalars().first()
-        if db_conn:
-            adapter = await get_adapter(db_conn.db_type, db_conn.connection_config)
-            if hasattr(adapter, "spreadsheet") and adapter.spreadsheet:
-                health_status["google_sheets"] = "healthy"
-            else:
-                health_status["google_sheets"] = "disconnected"
-                health_status["status"] = "degraded"
-        else:
-            health_status["google_sheets"] = "no_active_connection"
-    except Exception as e:
-        logger.error(f"Health check Sheets error: {e}")
-        health_status["google_sheets"] = f"unhealthy: {str(e)}"
-        health_status["status"] = "degraded"
-
-    return health_status
+async def health(checker: HealthChecker = Depends(get_health_checker)):
+    return await checker()
 
 
 # ── API-only backend ──────────────────────────────────────

@@ -1,51 +1,12 @@
 """
-Auth tests — JWT round-trip, pure helpers, and the verify-mobile endpoint
-(happy path, rejection, and rate limiting).
+Auth tests for JWT round-trip and active FMS v2 auth endpoints.
 
-The Google Sheets adapter and the active-connection DB lookup are stubbed so
-these run offline.
+The FMS sheet fetch function is stubbed so these run offline.
 """
 
 import pytest
 
-from app.routers.auth_router import (
-    normalize_phone,
-    get_first_value,
-    verify_admin_password,
-)
 from app.utils.auth import create_access_token, verify_token
-
-
-# ── Pure helpers ──────────────────────────────────────────
-
-def test_normalize_phone_strips_formatting():
-    assert normalize_phone("+91 98765-43210") == "9876543210"
-    assert normalize_phone("(987) 654 3210") == "9876543210"
-    assert normalize_phone("  9876543210  ") == "9876543210"
-
-
-def test_normalize_phone_handles_none():
-    assert normalize_phone(None) == ""
-
-
-def test_get_first_value_case_insensitive():
-    record = {"User Name": "alice", "Password": "secret"}
-    assert get_first_value(record, ["username", "user name"]) == "alice"
-    assert get_first_value(record, ["missing"], default="fallback") == "fallback"
-
-
-# ── Admin password verification (bcrypt + plaintext fallback) ──
-
-def test_verify_admin_password_plaintext_fallback():
-    assert verify_admin_password("secret", "secret") is True
-    assert verify_admin_password("secret", "wrong") is False
-
-
-def test_verify_admin_password_bcrypt():
-    import bcrypt
-    hashed = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode("utf-8")
-    assert verify_admin_password("secret", hashed) is True
-    assert verify_admin_password("wrong", hashed) is False
 
 
 # ── JWT round-trip ────────────────────────────────────────
@@ -55,11 +16,13 @@ def test_jwt_round_trip():
         "employee_id": "HOACPL-F25F-TL01",
         "employee_name": "Test Client",
         "mobile_number": "9876543210",
-        "user_type": "employee",
+        "user_type": "client",
+        "client_job_code": "HOACPL-F25F-TL01",
     })
     payload = verify_token(token)
     assert payload.employee_id == "HOACPL-F25F-TL01"
-    assert payload.user_type == "employee"
+    assert payload.user_type == "client"
+    assert payload.client_job_code == "HOACPL-F25F-TL01"
 
 
 def test_verify_token_rejects_garbage():
@@ -70,42 +33,51 @@ def test_verify_token_rejects_garbage():
     assert exc.value.status_code == 401
 
 
-# ── verify-mobile endpoint ────────────────────────────────
+# ── FMS v2 auth endpoints ─────────────────────────────────
 
 @pytest.fixture
-def stub_auth(monkeypatch):
-    """Stub get_active_connection + get_adapter so verify-mobile runs offline."""
-    from app.routers import auth_router
+def stub_fms_auth(monkeypatch):
+    """Stub FMS sheet lookup so verify-client-code runs offline."""
+    from app.fms_v2.models import FetchFmsRecordsOutput, FmsRecord
+    from app.routers import fms_v2_auth_router
 
-    class StubAdapter:
-        async def get_all_records(self, table_name=None):
-            return [
-                {"Client Job Code": "HOACPL-F25F-TL01",
-                 "Client Name": "Hindustan Oil",
-                 "Mobile Number": "9876543210"},
-            ]
+    async def _fake_fetch(data):
+        if data.client_job_code == "MISSING-F25F-TL01":
+            return FetchFmsRecordsOutput(
+                ok=True,
+                client_job_code=data.client_job_code,
+                records=[],
+                errors=[],
+                latency_ms=1,
+            )
+        return FetchFmsRecordsOutput(
+            ok=True,
+            client_job_code=data.client_job_code,
+            records=[
+                FmsRecord(
+                    sheet_name="FMS1",
+                    row_number=7,
+                    client_job_code=data.client_job_code,
+                    client_name="Hindustan Oil",
+                    base_fields={"Client Job Code": data.client_job_code},
+                    step_fields={},
+                    source_columns={},
+                ),
+                FmsRecord(
+                    sheet_name="FMS2",
+                    row_number=8,
+                    client_job_code=data.client_job_code,
+                    client_name="Hindustan Oil",
+                    base_fields={"Client Job Code": data.client_job_code},
+                    step_fields={},
+                    source_columns={},
+                ),
+            ],
+            errors=[],
+            latency_ms=1,
+        )
 
-    class StubCompany:
-        name = "Test CA Firm"
-
-    class StubConn:
-        db_type = "google_sheets"
-        connection_config = {"spreadsheet_id": "x"}
-        schema_map = {
-            "master_table": "RAW DATA",
-            "phone": "Mobile Number",
-            "primary_key": "Client Job Code",
-            "employee_name": "Client Name",
-        }
-
-    async def _fake_active_conn(_db):
-        return StubCompany(), StubConn()
-
-    async def _fake_get_adapter(*_a, **_k):
-        return StubAdapter()
-
-    monkeypatch.setattr(auth_router, "get_active_connection", _fake_active_conn)
-    monkeypatch.setattr(auth_router, "get_adapter", _fake_get_adapter)
+    monkeypatch.setattr(fms_v2_auth_router, "fetch_fms_records_by_client_code", _fake_fetch)
 
 
 @pytest.fixture
@@ -122,28 +94,56 @@ def reset_limiter():
     limiter.reset()
 
 
-def test_verify_mobile_happy_path(client, stub_auth, reset_limiter):
-    resp = client.post("/api/auth/verify-mobile",
-                       json={"mobile_number": "9876543210"})
+def test_verify_client_code_happy_path(client, stub_fms_auth, reset_limiter):
+    resp = client.post(
+        "/api/auth/verify-client-code",
+        json={"client_job_code": " hoacpl-f25f-tl01 "},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["employee_id"] == "HOACPL-F25F-TL01"
-    assert body["user_type"] == "employee"
+    assert body["client_job_code"] == "HOACPL-F25F-TL01"
+    assert body["employee_name"] == "Hindustan Oil"
+    assert body["user_type"] == "client"
     assert body["access_token"]
 
 
-def test_verify_mobile_unknown_number(client, stub_auth, reset_limiter):
-    resp = client.post("/api/auth/verify-mobile",
-                       json={"mobile_number": "0000000000"})
+def test_verify_client_code_unknown_code(client, stub_fms_auth, reset_limiter):
+    resp = client.post(
+        "/api/auth/verify-client-code",
+        json={"client_job_code": "MISSING-F25F-TL01"},
+    )
     assert resp.status_code == 401
 
 
-def test_verify_mobile_rate_limited(client, stub_auth, reset_limiter):
+def test_verify_client_code_rate_limited(client, stub_fms_auth, reset_limiter):
     """6th request within the window must be rejected with 429."""
     codes = [
-        client.post("/api/auth/verify-mobile",
-                    json={"mobile_number": "0000000000"}).status_code
+        client.post(
+            "/api/auth/verify-client-code",
+            json={"client_job_code": "MISSING-F25F-TL01"},
+        ).status_code
         for _ in range(6)
     ]
     assert codes[-1] == 429
     assert codes[:5] == [401, 401, 401, 401, 401]
+
+
+def test_verify_admin_hardcoded_success(client, reset_limiter):
+    resp = client.post(
+        "/api/auth/verify-admin",
+        json={"username": "admin", "password": "admin123"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["employee_id"] == "admin"
+    assert body["user_type"] == "admin"
+    assert body["access_token"]
+
+
+def test_verify_admin_hardcoded_failure(client, reset_limiter):
+    resp = client.post(
+        "/api/auth/verify-admin",
+        json={"username": "admin", "password": "wrong"},
+    )
+    assert resp.status_code == 401

@@ -2,6 +2,7 @@ export interface SessionUser {
   name: string;
   role: "client" | "admin";
   mobile?: string;
+  clientJobCode?: string;
 }
 
 export interface Session {

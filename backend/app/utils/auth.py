@@ -9,7 +9,7 @@ from jose import JWTError, jwt
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings
-from app.models.schemas import TokenPayload
+from app.fms_v2.models import TokenPayload
 
 security = HTTPBearer()
 
@@ -32,7 +32,8 @@ def verify_token(token: str) -> TokenPayload:
             employee_id=payload.get("employee_id", ""),
             employee_name=payload.get("employee_name", ""),
             mobile_number=payload.get("mobile_number", ""),
-            user_type=payload.get("user_type", "employee"),
+            user_type=payload.get("user_type", "client"),
+            client_job_code=payload.get("client_job_code"),
         )
     except JWTError:
         raise HTTPException(
