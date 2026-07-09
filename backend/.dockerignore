@@ -1,26 +1,43 @@
-# Build context is the backend/ folder (Render Root Directory = backend).
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv
+# Build context is backend/ (Render Root Directory = backend).
+
+# Secrets and local env
 .env
-.git
-.gitignore
+.env.*
+!.env.example
+
+# Python cache / virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# Test/dev artifacts
+tests/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# Local databases and generated runtime data from the old backend
 *.db
 *.sqlite
 *.sqlite3
-.DS_Store
-node_modules/
-*.log
-.idea/
-.vscode/
 botivate_master.db
 chroma_data/
 uploads/
 static/
-tests/
-.pytest_cache/
+
+# VCS/editor/OS noise
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/
+
+# Node artifacts should not be in backend context
+node_modules/
+dist/
