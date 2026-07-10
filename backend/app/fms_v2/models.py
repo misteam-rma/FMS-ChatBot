@@ -8,7 +8,9 @@ from app.fms_v2.config import FMS_SHEET_NAMES, FmsSheetName
 
 # Records normally come from FMS1-FMS4, but ADMIN queries may also cite extra
 # tabs (RAW DATA client master, dashboards). Allow those source names too.
-SourceSheetName = FmsSheetName | Literal["RAW DATA", "NEW DASH", "Completed Dash"]
+SourceSheetName = FmsSheetName | Literal[
+    "RAW DATA", "NEW DASH", "Completed Dash", "RUF Help Sheet", "Sanction Letter"
+]
 
 # Fold Unicode dash variants (non-breaking hyphen, en/em dash, etc.) to ASCII
 # "-" so codes match regardless of how the dash was typed/pasted. Kept here to

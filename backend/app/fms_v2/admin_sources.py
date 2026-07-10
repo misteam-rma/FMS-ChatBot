@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 
+from app.fms_v2.dash import find_document_links
 from app.fms_v2.models import FmsRecord, SourceColumn
 from app.fms_v2.sheets import (
     column_letter,
@@ -30,6 +31,13 @@ NEW_DASH = "NEW DASH"
 COMPLETED_DASH = "Completed Dash"
 
 _JOB_CODE_RE = re.compile(r"-F\d{2}[A-Z]-", re.IGNORECASE)
+
+# Document/link intent — pulls RUF Help Sheet + Sanction Letter download links.
+_DOC_TERMS = re.compile(
+    r"\b(document|documents|doc|docs|letter|sanction|search\s*report|"
+    r"valuation|tev|ddr|report|download|link|links|copy|file|attachment)\b",
+    re.IGNORECASE,
+)
 
 # Keyword triggers that widen an admin query to extra tabs.
 _PHONE_TERMS = re.compile(
@@ -166,3 +174,43 @@ async def fetch_extra_admin_records(
         len(records),
     )
     return records
+
+
+def is_document_query(message: str) -> bool:
+    """True if the message asks for a document / report / sanction-letter link."""
+
+    return bool(_DOC_TERMS.search(str(message or "")))
+
+
+async def document_link_records(client_code: str) -> list[FmsRecord]:
+    """Fetch a code's document links (RUF Help Sheet + Sanction Letter) and
+    return them as FmsRecords so the LLM can answer document queries with real
+    download links — the natural-language equivalent of the FMS button."""
+
+    code = normalize_client_job_code(client_code)
+    if not code:
+        return []
+    links = await find_document_links(code)
+    if not links:
+        return []
+
+    fields: dict = {}
+    sources: dict = {}
+    # RUF Help Sheet holds Search/Valuation/TEV/DDR; Sanction Letter holds its own.
+    for label, url in links.items():
+        fields[label] = url
+        sheet = "Sanction Letter" if label == "Sanction Letter" else "RUF Help Sheet"
+        sources[label] = SourceColumn(
+            sheet_name=sheet, row_number=1, column_name=label,
+        )
+    return [
+        FmsRecord(
+            sheet_name="RUF Help Sheet",
+            row_number=1,
+            client_job_code=code,
+            client_name="",
+            base_fields=fields,
+            step_fields={},
+            source_columns=sources,
+        )
+    ]

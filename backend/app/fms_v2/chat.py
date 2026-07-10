@@ -10,7 +10,11 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from app.fms_v2.admin_sources import fetch_extra_admin_records
+from app.fms_v2.admin_sources import (
+    document_link_records,
+    fetch_extra_admin_records,
+    is_document_query,
+)
 from app.fms_v2.config import FMS_SHEET_NAMES, FmsSheetName
 from app.fms_v2.llm import GenerateFmsAnswerInput, LlmResult, generate_fms_answer
 from app.fms_v2.models import (
@@ -332,10 +336,22 @@ async def _chat_for_client(
             )
         )
 
+    records = list(fetch_result.records)
+    # Make the LLM a superset of the buttons: if the client asks for a document
+    # / report / sanction letter, add their real download links (RUF Help Sheet
+    # + Sanction Letter) so natural-language doc queries get the same links the
+    # FMS button gives.
+    if is_document_query(data.message):
+        try:
+            doc_records = await document_link_records(auth_code)
+            records = doc_records + records
+        except Exception:
+            logger.exception("FMS v2 client doc-link fetch failed code=%s", auth_code)
+
     return await _answer_with_llm(
         data,
         user,
-        records=fetch_result.records,
+        records=records,
         generate_answer_fn=generate_answer_fn,
     )
 
