@@ -3,11 +3,13 @@
 import pytest
 
 from app.fms_v2.chat import (
+    LIST_TERMS_RE,
     build_fms_chat_prompt,
     chat_with_fms_v2,
     extract_client_job_codes,
     format_admin_client_list,
     has_source_citation,
+    is_scope_refusal,
     records_to_prompt_payload,
 )
 from app.fms_v2.llm import LlmResult
@@ -87,6 +89,57 @@ def test_extract_client_job_codes_normalizes_unique_codes():
     assert extract_client_job_codes(
         "Check hoacpl-f25f-tl01 and HOACPL-F25F-TL01 plus ITPL-F25E-SUBCC02"
     ) == ["HOACPL-F25F-TL01", "ITPL-F25E-SUBCC02"]
+
+
+@pytest.mark.parametrize(
+    "message,is_list",
+    [
+        ("list all client codes", True),
+        ("give me all client job codes", True),
+        ("how many clients", True),
+        ("show clients", True),
+        # Out-of-scope / unrelated uses of "code" must NOT trigger the list.
+        ("give me code for leap year", False),
+        ("write me code", False),
+        ("what is the sanction code", False),
+    ],
+)
+def test_list_regex_ignores_unrelated_code_mentions(message, is_list):
+    assert bool(LIST_TERMS_RE.search(message)) is is_list
+
+
+def test_scope_refusal_detector():
+    assert is_scope_refusal("Main sirf RMA FMS loan-file queries mein madad kar sakta hoon.")
+    assert is_scope_refusal("I can only help with FMS loan-file queries.")
+    # A real cited answer is not a refusal.
+    assert not is_scope_refusal("Status DROP hai. Source: FMS1 row 7, column Status.")
+    assert not is_scope_refusal("The capital of France is Paris.")
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_answer_passes_citation_guard():
+    """A scope refusal from the LLM must reach the user, not be replaced by the
+    'citation missing' fallback."""
+    async def fake_fetch(data):
+        return FetchFmsRecordsOutput(
+            ok=True, client_job_code=data.client_job_code,
+            records=[sample_record()], errors=[], latency_ms=1,
+        )
+
+    async def fake_generate(_prompt):
+        return LlmResult(
+            ok=True, provider="groq", model="x",
+            content="Main sirf RMA FMS loan-file queries mein madad kar sakta hoon.",
+        )
+
+    resp = await chat_with_fms_v2(
+        FmsV2ChatMessage(message="what is the capital of France"),
+        client_user(),
+        fetch_records_fn=fake_fetch,
+        generate_answer_fn=fake_generate,
+    )
+    assert "sirf RMA FMS" in resp.reply
+    assert "citation missing" not in resp.reply
 
 
 def test_source_citation_detector_accepts_natural_forms():

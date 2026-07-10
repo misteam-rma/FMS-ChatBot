@@ -64,7 +64,11 @@ LINK_TERMS = {"link", "url", "document", "doc", "file", "attachment", "copy"}
 # "total codes", "list clients") all route to the deterministic table path
 # instead of the record-capped LLM path.
 _LIST_VERB = r"(list|show|tell|give|display|all|every|sab(?:hi)?|saare?|kitne|kitna|how\s*many|total|count|number\s*of)"
-_LIST_NOUN = r"(clients?|codes?|job\s*codes?|companies|company|customers?)"
+# The noun must clearly refer to client codes/clients, NOT a bare "code"
+# (which appears in unrelated asks like "give me code for leap year").
+_LIST_NOUN = (
+    r"(client\s*(job\s*)?codes?|job\s*codes?|clients|companies|company|customers?)"
+)
 LIST_TERMS_RE = re.compile(
     rf"\b{_LIST_VERB}\b.*\b{_LIST_NOUN}\b|\b{_LIST_NOUN}\b.*\b{_LIST_VERB}\b",
     re.I | re.DOTALL,
@@ -87,6 +91,46 @@ GREETING_START_RE = re.compile(
     r"ok|okay|kaise\s*ho|how\s*are\s*you|test)\b",
     re.IGNORECASE,
 )
+
+# Deterministic injection / abuse screen. Runs BEFORE any fetch or LLM call, so
+# a malicious request is rejected instantly (and cheaply) rather than reaching
+# the model. This is a fast first line of defense; the tool allowlist and
+# server-side credentials remain the real least-privilege guarantee.
+INJECTION_RE = re.compile(
+    r"ignore\s+(all\s+)?(previous|above|prior|the)\s+(instructions|rules|prompts?)"
+    r"|disregard\s+(all\s+|the\s+)?(instructions|rules|prompts?)"
+    r"|(reveal|show|print|repeat|display|leak|expose)\s+(me\s+)?"
+    r"(your\s+|the\s+)?(system\s+)?(prompt|instructions|rules)"
+    r"|(service[\s_-]*account|api[\s_-]*key|secret|password|credential|"
+    r"env(ironment)?\s+var|jwt[\s_-]*secret|\.env\b)"
+    r"|you\s+are\s+now\b|pretend\s+to\s+be\b|act\s+as\s+(?!an?\s+(fms|rma|data))"
+    r"|jailbreak|developer\s+mode|DAN\b",
+    re.IGNORECASE,
+)
+# Write/mutation attempts — this is a strictly READ-ONLY assistant. A mutation
+# verb followed (anywhere) by a data-object word is blocked.
+MUTATION_RE = re.compile(
+    r"\b(delete|remove|drop|erase|update|edit|modify|overwrite|insert|"
+    r"write\s+to|set\s+the\s+value|change\s+the)\b"
+    r".{0,60}\b(row|record|entry|cell|sheet|data|code|client|column|"
+    r"status|marks?|amount|value|field|name|phone|number)\b",
+    re.IGNORECASE,
+)
+
+INJECTION_REFUSAL = (
+    "Main sirf RMA FMS loan-file queries mein madad kar sakta hoon (read-only). "
+    "Aap kisi Client Job Code ka status, dates, bank ya documents pooch sakte hain."
+)
+
+
+def screen_user_input(message: str) -> str | None:
+    """Return a refusal message if the input is an injection/abuse/write attempt,
+    else None. Pure + deterministic; no network or LLM cost."""
+
+    text = str(message or "")
+    if INJECTION_RE.search(text) or MUTATION_RE.search(text):
+        return INJECTION_REFUSAL
+    return None
 # Data-intent words: if any appear, it is NOT small-talk even if it opens with a
 # greeting (e.g. "hi, status batao").
 DATA_INTENT_RE = re.compile(
@@ -182,6 +226,13 @@ async def chat_with_fms_v2(
         user.employee_id,
         len(validated.message),
     )
+
+    # Deterministic input guard: reject injection / credential-probe / write
+    # attempts before any fetch or LLM call (instant, no cost).
+    refusal = screen_user_input(validated.message)
+    if refusal is not None:
+        logger.warning("FMS v2 chat input-guard blocked role=%s", role)
+        return FmsV2ChatResponse(reply=refusal)
 
     if is_greeting_or_small_talk(validated.message):
         logger.info("FMS v2 chat small-talk role=%s (no fetch)", role)
@@ -404,7 +455,9 @@ async def _answer_with_llm(
             )
         )
 
-    if not has_source_citation(result.content):
+    # A scope refusal ("I only help with FMS loan-file queries") makes no
+    # factual claim, so it needs no Source citation — let it through.
+    if not has_source_citation(result.content) and not is_scope_refusal(result.content):
         logger.warning(
             "FMS v2 LLM answer rejected because citation was missing provider=%s model=%s",
             result.provider,
@@ -431,9 +484,22 @@ def build_fms_chat_prompt(
     """Build a strict, testable FMS prompt from structured records."""
 
     system_prompt = (
-        "You are an FMS loan-file assistant for RMA.\n"
-        "You answer only from the provided FMS tool output. The output contains "
-        "rows from FMS1, FMS2, FMS3, and FMS4.\n\n"
+        "You are the RMA FMS loan-file assistant, and NOTHING else.\n"
+        "You answer only from the provided FMS tool output about RMA's loan "
+        "files — client job codes, statuses, steps, dates, banks, loan amounts, "
+        "documents, and contact details found in the sheets.\n\n"
+        "SCOPE (strict):\n"
+        "- Answer ONLY questions about RMA FMS loan-file data present in the "
+        "tool output.\n"
+        "- If the user asks anything outside this scope — general knowledge, "
+        "coding, math, trivia, current events, personal advice, or any topic "
+        "not about RMA loan files (e.g. 'code for a leap year', 'write a poem', "
+        "'what is the capital of X') — DO NOT answer it. Politely refuse in one "
+        "short sentence and steer them back, e.g.: \"Main sirf RMA FMS loan-file "
+        "queries mein madad kar sakta hoon. Aap kisi Client Job Code ka status, "
+        "dates, bank ya documents pooch sakte hain.\" A refusal needs no Source "
+        "citation.\n"
+        "- Never invent capabilities, run code, or answer hypotheticals.\n\n"
         "Never fabricate missing values. Never use a value unless it appears in "
         "the tool output. For each factual claim, cite the source in this exact "
         "format: `Source: <sheet> row <row_number>, column <column_name>` "
@@ -729,6 +795,26 @@ def extract_client_job_codes(text: str) -> list[str]:
 
 def has_source_citation(text: str) -> bool:
     return bool(SOURCE_CITATION_RE.search(str(text or "")))
+
+
+# A short, no-data reply that declines an out-of-scope question. Such replies
+# make no factual claim, so the citation guard must not reject them.
+_REFUSAL_RE = re.compile(
+    r"(sirf\s+rma|only\s+(help|assist).{0,30}(fms|loan)|"
+    r"out\s+of\s+scope|cannot\s+(help|answer).{0,30}(that|this)|"
+    r"madad\s+kar\s+sakta|is\s+topic\s+(par|mein)\s+madad|"
+    r"loan-file\s+quer)",
+    re.IGNORECASE,
+)
+
+
+def is_scope_refusal(text: str) -> bool:
+    """True for a short scope-refusal reply (no factual claim, no citation needed)."""
+
+    t = str(text or "").strip()
+    # Refusals are short; a long answer that happens to match is likely a real
+    # answer missing its citation, so keep the length guard.
+    return len(t) <= 400 and bool(_REFUSAL_RE.search(t))
 
 
 def tokenize(text: str) -> set[str]:
