@@ -19,5 +19,7 @@ export default defineConfig({
   server: {
     port: 5173,
     host: "0.0.0.0",
+    // Allow ngrok tunnels (free URLs change each restart, so allow the whole domain).
+    allowedHosts: [".ngrok-free.dev", ".ngrok-free.app"],
   },
 });
