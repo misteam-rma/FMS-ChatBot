@@ -100,19 +100,19 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-[100dvh] flex items-center justify-center bg-background p-4">
+    <div className="min-h-[100dvh] flex items-center justify-center bg-background p-3 sm:p-4 md:p-6">
       <div className="w-full max-w-md bg-card border border-border rounded-xl shadow-lg overflow-hidden">
-        <div className="p-8 text-center border-b border-border">
+        <div className="p-6 sm:p-8 text-center border-b border-border">
           <img
             src="/RMA.png"
             alt="RMA — Rahul Mishra & Associates"
-            className="mx-auto h-20 w-auto object-contain"
+            className="mx-auto h-14 sm:h-20 w-auto object-contain"
           />
-          <p className="text-sm font-medium text-primary mt-4">
+          <p className="text-xs sm:text-sm font-medium text-primary mt-3 sm:mt-4">
             Rahul Mishra &amp; Associates | Chartered Accountants
           </p>
-          <div className="w-12 h-[2px] bg-accent mx-auto mt-4 mb-3"></div>
-          <p className="text-xs font-semibold text-accent uppercase tracking-wider">
+          <div className="w-12 h-[2px] bg-accent mx-auto mt-3 sm:mt-4 mb-2 sm:mb-3"></div>
+          <p className="text-[11px] sm:text-xs font-semibold text-accent uppercase tracking-wider">
             Finance FMS Client Portal
           </p>
         </div>
@@ -121,21 +121,21 @@ export default function LoginPage() {
           <TabsList className="w-full flex border-b border-border rounded-none p-0 h-auto bg-transparent">
             <TabsTrigger
               value="client"
-              className="flex-1 py-4 rounded-none data-[state=active]:bg-background data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none font-semibold"
+              className="flex-1 py-3 sm:py-4 text-sm rounded-none data-[state=active]:bg-background data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none font-semibold"
             >
               Client Login
             </TabsTrigger>
             <TabsTrigger
               value="admin"
-              className="flex-1 py-4 rounded-none data-[state=active]:bg-background data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none font-semibold"
+              className="flex-1 py-3 sm:py-4 text-sm rounded-none data-[state=active]:bg-background data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none font-semibold"
             >
               Admin Login
             </TabsTrigger>
           </TabsList>
 
-          <div className="p-8">
+          <div className="p-6 sm:p-8">
             <TabsContent value="client" className="m-0 focus-visible:outline-none">
-              <form onSubmit={handleClientLogin} className="space-y-6">
+              <form onSubmit={handleClientLogin} className="space-y-4 sm:space-y-6">
                 <div className="space-y-2">
                   <Label htmlFor="client-phone" className="text-sm font-medium">
                     Registered Phone Number
@@ -149,7 +149,7 @@ export default function LoginPage() {
                     value={clientPhone}
                     onChange={(e) => setClientPhone(e.target.value)}
                     placeholder="Enter your registered mobile number"
-                    className="h-12"
+                    className="h-11 sm:h-12"
                     disabled={isLoading}
                   />
                 </div>
@@ -165,7 +165,7 @@ export default function LoginPage() {
                     value={clientJobCode}
                     onChange={(e) => setClientJobCode(e.target.value.toUpperCase())}
                     placeholder="Enter Client Job Code"
-                    className="h-12"
+                    className="h-11 sm:h-12"
                     disabled={isLoading}
                   />
                   {error && activeTab === "client" && (
@@ -184,7 +184,7 @@ export default function LoginPage() {
             </TabsContent>
 
             <TabsContent value="admin" className="m-0 focus-visible:outline-none">
-              <form onSubmit={handleAdminLogin} className="space-y-6">
+              <form onSubmit={handleAdminLogin} className="space-y-4 sm:space-y-6">
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="username" className="text-sm font-medium">
@@ -196,7 +196,7 @@ export default function LoginPage() {
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder="Admin username"
-                      className="h-12"
+                      className="h-11 sm:h-12"
                       disabled={isLoading}
                     />
                   </div>

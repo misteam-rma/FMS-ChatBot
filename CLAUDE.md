@@ -11,11 +11,13 @@ Read this file first before making changes.
 
 - **Backend:** FastAPI API in `backend/`, deployed to Render with Docker.
 - **Frontend:** React 19 + Vite + Tailwind v4 + shadcn/ui SPA in `frontend/`, deployed to Vercel.
-- **Data source:** Google Sheets workbook `ChatBot-FMS-RMA`.
-- **Active sheets:** only `FMS1`, `FMS2`, `FMS3`, and `FMS4`.
-- **Client auth:** `Client Job Code`, validated from FMS1-FMS4.
+- **Data source:** Google Sheets workbook `NEW-FMS-RMA` (ID `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok`).
+- **Chat/auth data:** `FMS1`-`FMS4` for chat records; `RAW DATA` for phone auth + admin phone lookups;
+  `NEW DASH` / `Completed Dash` / `RUF Help Sheet` / `Sanction Letter` for the deterministic menu intents.
+- **Client auth:** phone number **+** `Client Job Code` must pair in the same `RAW DATA` row (read-only).
 - **Admin auth:** hard-coded `admin` / `admin123`.
 - **Chat path:** deterministic Python sheet fetch/parsing first, then an LLM answer over structured records.
+  Menu-button clicks are answered deterministically (no LLM); free-typed text goes to the LLM (a superset).
 
 The active backend code is under `backend/app/fms_v2/` plus:
 
@@ -94,7 +96,8 @@ Do not print or commit secret values.
 ## Active Architecture
 
 ```text
-Vercel React SPA -> Render FastAPI -> deterministic FMS1-FMS4 Google Sheets tools -> LLM fallback
+Vercel React SPA -> Render FastAPI -> input guard -> deterministic Google Sheets tools (FMS1-4 +
+dashboard/RAW DATA/doc tabs) -> LLM answer over structured records (scope-limited, citation-guarded)
 ```
 
 SQLite, SQLAlchemy sessions, company setup, ChromaDB, approval workflows, and the old LangGraph
@@ -105,32 +108,49 @@ agent are not part of the cleaned backend.
 | Area | Files | Notes |
 |---|---|---|
 | Config | `backend/app/config.py`, `backend/app/fms_v2/config.py` | FMS constants, provider config |
-| Models | `backend/app/fms_v2/models.py` | Pydantic request/output/tool models |
-| Sheets | `backend/app/fms_v2/sheets.py` | Deterministic Google Sheets fetch, retry, timeout, parsing |
+| Models | `backend/app/fms_v2/models.py` | Pydantic request/output/tool models; `_normalize_code` folds Unicode dashes |
+| Sheets | `backend/app/fms_v2/sheets.py` | Google Sheets fetch (retry/timeout), parsing, generic `fetch_worksheet_values` |
+| Auth sheet | `backend/app/fms_v2/auth_sheet.py` | Phone + code pairing check against `RAW DATA` |
+| Dash | `backend/app/fms_v2/dash.py` | Dashboard readers (NEW DASH / Completed Dash) + document links (RUF / Sanction) |
+| Intents | `backend/app/fms_v2/intents.py` | Deterministic menu intents (Status/Steps/Docs/Missing/Banks/FMS/Total…) |
+| Admin sources | `backend/app/fms_v2/admin_sources.py` | Extra LLM records for admin (RAW DATA phones, dashboards) + document links |
 | Tools | `backend/app/fms_v2/tools.py` | Validated tool wrapper for sheet fetch |
-| LLM | `backend/app/fms_v2/llm.py` | Sequential fallback: Cerebras -> Groq -> NVIDIA -> OpenAI |
-| Chat | `backend/app/fms_v2/chat.py` | Authorization, prompt builder, admin narrowing, citation guard |
+| LLM | `backend/app/fms_v2/llm.py` | Sequential fallback: Cerebras -> Groq -> NVIDIA -> OpenAI (12s each) |
+| Chat | `backend/app/fms_v2/chat.py` | Auth routing, input guard, prompt builder, ranking, citation + scope-refusal guard |
 | Health | `backend/app/fms_v2/health.py` | Service, Sheets, and provider health; database is `not_used` |
-| Routers | `backend/app/routers/fms_v2_*_router.py` | Active auth/chat API |
-| Frontend API | `frontend/src/lib/api.ts` | Calls `/auth/verify-client-code`, `/auth/verify-admin`, `/chat/send` |
+| Routers | `backend/app/routers/fms_v2_*_router.py` | Active auth/chat API (`/chat/send`, `/chat/intent`) |
+| Frontend API | `frontend/src/lib/api.ts` | Calls `/auth/verify-client-code`, `/auth/verify-admin`, `/chat/send`, `/chat/intent` |
 
 ---
 
 ## Sheet Facts
 
-Workbook: `ChatBot-FMS-RMA`
+Workbook: `NEW-FMS-RMA`
 
 Workbook ID: `10Mf2nwiMSU0tqC1jBL-MaYIDAA1V1KuwuR_UugVhbok`
 
-| Sheet | GID | Header row | Client Job Code column |
-|---|---:|---:|---|
-| `FMS1` | `663292535` | 6 | `J` |
-| `FMS2` | `315694386` | 6 | `B` |
-| `FMS3` | `1157508021` | 6 | `J` |
-| `FMS4` | `486978298` | 6 | `B` |
+Chat/parse sheets (`FMS_SHEET_NAMES`), header row 6:
+
+| Sheet | Header row | Client Job Code column |
+|---|---:|---|
+| `FMS1` | 6 | `J` |
+| `FMS2` | 6 | `B` |
+| `FMS3` | 6 | `J` |
+| `FMS4` | 6 | `B` |
+
+Auxiliary tabs (in the same workbook — one workbook holds everything; verified against the
+old 3-workbook Apps Script bot in `.agents/`):
+
+| Tab | Used by | Key columns (0-based) |
+|---|---|---|
+| `RAW DATA` | phone auth, admin phone lookups | `[15]` Client Job Code, `[17]` Mobile Number, `[1]` Client Name |
+| `NEW DASH` / `Completed Dash` | Status/Steps/Missing intents | data rows from ~row 11: `[1]` code, `[2]` name, `[3]` bank, `[5]` amount, `[8]` TL, `[28]` %, step cols `[9,10,15..23]` (NEW, 11 steps) / `..26` (Completed, 14) |
+| `RUF Help Sheet` | FMS/Docs intent + doc queries | `[0]` code, `[1]` Search, `[2]` Valuation, `[3]` TEV, `[4]` DDR |
+| `Sanction Letter` | FMS/Docs intent + doc queries | `[0]` code, `[1]` bank, `[2]` sanction link |
 
 Some Client Job Codes appear in multiple rows and multiple sheets. Auth and chat context must
-return all matching rows, not only the first row.
+return all matching rows, not only the first row. Codes may contain Unicode dash variants
+(non-breaking hyphen etc.); `normalize_client_job_code` folds them to ASCII `-` before matching.
 
 Repeated workflow columns such as `Doer`, `Planned`, `Actual`, `URL`, `Remark`, and `Status`
 must be preserved with step context by the parser.
@@ -139,12 +159,13 @@ must be preserved with step context by the parser.
 
 ## Auth Flow
 
-Client:
+Client (phone + code pairing):
 
-1. Frontend posts `client_job_code` to `POST /api/auth/verify-client-code`.
-2. Backend searches exact normalized `Client Job Code` matches across FMS1-FMS4.
-3. Login succeeds if at least one matching row exists.
-4. JWT includes `user_type="client"` and `client_job_code`.
+1. Frontend posts `{phone, client_job_code}` to `POST /api/auth/verify-client-code`.
+2. Backend verifies the phone and code appear in the **same `RAW DATA` row** (`auth_sheet.py`) — read-only.
+3. It then confirms the code has FMS1-FMS4 records (data to serve).
+4. Login fails if the pair is not found (codes with no phone on file cannot log in).
+5. JWT includes `user_type="client"`, `client_job_code`, and the normalized `mobile_number`.
 
 Admin:
 
@@ -158,26 +179,37 @@ Rate limiting is still in-memory via `slowapi`; use Redis if deploying multiple 
 
 ## Chat Flow
 
-`POST /api/chat/send` uses `fms_v2_chat_router.py`.
+Two endpoints in `fms_v2_chat_router.py`:
+
+- `POST /api/chat/send` — free-typed messages → LLM path (a superset of the buttons).
+- `POST /api/chat/intent` — menu-button clicks → deterministic dashboard answers, no LLM.
+  Frontend routing: labels in `LABEL_TO_INTENT` hit `/intent`; anything else hits `/send`.
+
+Input guard (runs first, before any fetch/LLM, in `screen_user_input`):
+
+- Deterministic regex screen rejects injection ("ignore previous instructions", "reveal system
+  prompt"), credential probes (service-account JSON, API key, JWT secret, `.env`), and write/
+  mutation attempts. Blocked requests get an instant refusal — zero cost, no fetch, no LLM.
 
 Client users:
 
-- Can only access rows matching their JWT `client_job_code`.
-- If the message asks for another Client Job Code, the backend refuses before fetching or calling the LLM.
+- Can only access rows matching their JWT `client_job_code`; a query for another code is refused.
+- Document/link queries ("sanction letter", "search report") pull `RUF Help Sheet` / `Sanction
+  Letter` links into the LLM context so the LLM answers with real download links (superset of the FMS button).
 
 Admin users:
 
-- Can query across FMS1-FMS4.
-- If a query includes Client Job Codes, deterministic fetch runs for those codes.
+- Can query across FMS1-FMS4, plus extra tabs when relevant (`admin_sources.py`): phone/contact
+  queries pull `RAW DATA`; dashboard/count queries pull `NEW DASH` / `Completed Dash`.
 - List/code summary queries are answered deterministically without the LLM.
-- Broad queries fetch and rank parsed FMS rows before passing capped structured context to the LLM.
+- Broad queries fetch and rank parsed rows before passing capped structured context to the LLM.
 
 LLM rules:
 
-- Sheet access never happens inside prompts.
-- The LLM receives structured records with source metadata.
-- Answers must cite sheet, row, and column for factual claims.
-- Backend rejects uncited LLM answers.
+- Sheet access never happens inside prompts; the LLM receives structured records with source metadata.
+- The system prompt is scope-limited: it refuses out-of-scope questions (general knowledge, coding,
+  trivia) — such refusals bypass the citation guard (`is_scope_refusal`).
+- Answers must cite sheet, row, and column for factual claims; the backend rejects uncited answers.
 - Default answer style is Hinglish in Latin script, unless the user writes plain English or Devanagari.
 
 ---
