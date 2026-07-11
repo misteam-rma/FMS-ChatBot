@@ -414,23 +414,8 @@ export default function ChatPage() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Menu chip bar — client-only deterministic quick actions (no LLM). */}
-          {isClient && (
-            <div className="px-4 pt-3 bg-card border-t border-border shrink-0">
-              <div className="flex flex-wrap gap-2">
-                {MENU_ACTIONS.map((action) => (
-                  <button
-                    key={action.intent}
-                    onClick={() => handleIntent(action.intent, action.label)}
-                    disabled={isSending}
-                    className="px-3 py-1.5 text-xs font-medium rounded-full border border-border text-foreground bg-muted hover:bg-accent/15 hover:border-accent hover:text-primary transition-colors disabled:opacity-50"
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Quick actions are shown only via the header dropdown (hamburger),
+              not as an always-visible bar. See the sidebar drawer below. */}
 
           {/* Input Area */}
           <div className="p-4 bg-card mt-auto shrink-0">
